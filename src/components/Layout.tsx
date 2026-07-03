@@ -3,7 +3,7 @@ import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import { useState } from 'react'
 import {
   LayoutDashboard, BrainCircuit, History, ShieldAlert, Radar, PieChart,
-  Link2, Settings2, LogOut, OctagonX, Sun, Moon
+  Link2, Settings2, LogOut, OctagonX, Sun, Moon, BookOpen
 } from 'lucide-react'
 import { Modal } from './ui'
 import { useStore } from '../store/store'
@@ -13,7 +13,7 @@ import { DISCLAIMER_SHORT } from '../types'
 const TITLES: Record<string, string> = {
   '/': 'Trading Dashboard', '/strategy': 'Strategy Engine', '/history': 'Trade History',
   '/risk': 'Risk Management', '/intel': 'Market Intelligence', '/portfolio': 'Portfolio',
-  '/brokers': 'Broker Connections', '/admin': 'Admin Console'
+  '/brokers': 'Broker Connections', '/admin': 'Admin Console', '/guide': 'Setup Guide'
 }
 
 export default function Layout() {
@@ -65,6 +65,7 @@ export default function Layout() {
           {item('/brokers', <Link2 size={17} />, 'Brokers')}
           <div className="nav-sep">Operations</div>
           {item('/admin', <Settings2 size={17} />, 'Admin Console')}
+          {item('/guide', <BookOpen size={17} />, 'Setup Guide')}
           <button className="nav-item" onClick={logOut} style={{ marginTop: 'auto' }}><LogOut size={17} /><span>Sign out</span></button>
         </nav>
       </aside>

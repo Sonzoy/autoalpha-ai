@@ -15,6 +15,7 @@ import MarketIntel from './pages/MarketIntel'
 import Portfolio from './pages/Portfolio'
 import Brokers from './pages/Brokers'
 import Admin from './pages/Admin'
+import SetupGuide from './pages/SetupGuide'
 
 const SPEED_MS: Record<number, number> = { 1: 8000, 10: 2500, 60: 800 }
 
@@ -131,6 +132,7 @@ export default function App() {
           <Route path="/portfolio" element={<Portfolio />} />
           <Route path="/brokers" element={<Brokers />} />
           <Route path="/admin" element={<Admin />} />
+          <Route path="/guide" element={<SetupGuide />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       </Routes>
