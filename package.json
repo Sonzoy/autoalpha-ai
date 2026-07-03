@@ -6,9 +6,11 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "server": "tsx server/main.ts"
   },
   "dependencies": {
+    "express": "^4.21.1",
     "lucide-react": "^0.454.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
@@ -17,6 +19,8 @@
     "zustand": "^4.5.5"
   },
   "devDependencies": {
+    "@types/express": "^5.0.0",
+    "tsx": "^4.19.2",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.3",

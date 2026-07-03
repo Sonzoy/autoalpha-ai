@@ -7,6 +7,7 @@ import { LIVE_LOCK_MESSAGE } from '../types'
 import type { BrokerId } from '../types'
 import { IBKRBrokerAdapter } from '../engine/brokers/IBKRBrokerAdapter'
 import { EToroBrokerAdapter } from '../engine/brokers/EToroBrokerAdapter'
+import { remote, remoteBrokerConnect, remoteBrokerSync } from '../remote'
 
 export default function Brokers() {
   const brokerConn = useStore(s => s.brokerConn)
@@ -50,20 +51,29 @@ export default function Brokers() {
 
   const connect = async (id: BrokerId) => {
     setBusy(id)
-    setBrokerConn(id, { status: 'connecting', message: 'Connecting…' })
-    const r = await brokers[id].connect()
-    setBrokerConn(id, {
-      status: brokers[id].status(), message: r.message,
-      permissions: r.permissions, healthy: brokers[id].healthy(),
-      lastSync: r.ok ? Date.now() : null
-    })
+    if (remote.active) {
+      // 24/7 server runs the adapters — connect happens server-side (no browser CORS limits)
+      await remoteBrokerConnect(id)
+    } else {
+      setBrokerConn(id, { status: 'connecting', message: 'Connecting…' })
+      const r = await brokers[id].connect()
+      setBrokerConn(id, {
+        status: brokers[id].status(), message: r.message,
+        permissions: r.permissions, healthy: brokers[id].healthy(),
+        lastSync: r.ok ? Date.now() : null
+      })
+    }
     setBusy(null)
   }
 
   const sync = async (id: BrokerId) => {
     setBusy(id)
-    const r = await brokers[id].sync()
-    setBrokerConn(id, { message: r.message, lastSync: r.ok ? Date.now() : brokerConn[id].lastSync, healthy: brokers[id].healthy(), status: brokers[id].status() })
+    if (remote.active) {
+      await remoteBrokerSync(id)
+    } else {
+      const r = await brokers[id].sync()
+      setBrokerConn(id, { message: r.message, lastSync: r.ok ? Date.now() : brokerConn[id].lastSync, healthy: brokers[id].healthy(), status: brokers[id].status() })
+    }
     setBusy(null)
   }
 

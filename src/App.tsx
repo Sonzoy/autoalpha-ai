@@ -5,6 +5,7 @@ import { brokers, engineTick } from './engine/TradingEngine'
 import Layout from './components/Layout'
 import Auth from './pages/Auth'
 import Landing from './pages/Landing'
+import { detectServer, remote, startRemote } from './remote'
 import Onboarding from './pages/Onboarding'
 import Dashboard from './pages/Dashboard'
 import StrategyEngine from './pages/StrategyEngine'
@@ -23,6 +24,22 @@ export default function App() {
   const speed = useStore(s => s.speed)
   const theme = useStore(s => s.theme)
   const [showAuth, setShowAuth] = useState(false)
+  const [mode, setMode] = useState<'detecting' | 'local' | 'remote'>('detecting')
+  const [tokenDraft, setTokenDraft] = useState('')
+  const [, forceRender] = useState(0)
+
+  // Detect the 24/7 server daemon: if present, the browser becomes a remote
+  // control panel and the local engine stays off.
+  useEffect(() => {
+    void detectServer().then(isServer => {
+      if (isServer) {
+        setMode('remote')
+        if (remote.token) startRemote(remote.token)
+      } else {
+        setMode('local')
+      }
+    })
+  }, [])
 
   // Apply theme to the document root
   useEffect(() => {
@@ -39,6 +56,7 @@ export default function App() {
 
   // Ensure the paper venue is connected once the user is in the console
   useEffect(() => {
+    if (mode !== 'local') return
     if (!currentUser || !onboarded) return
     const st = useStore.getState()
     if (st.brokerConn.paper.status !== 'connected') {
@@ -56,6 +74,7 @@ export default function App() {
   // this tab stays open (browser or laptop closed = engine stopped; true
   // 24/7 unattended operation requires a server-side deployment).
   useEffect(() => {
+    if (mode !== 'local') return // remote mode: the server runs the engine 24/7
     if (!currentUser || !onboarded) return
     const workerCode = 'let id=null;onmessage=e=>{if(id)clearInterval(id);id=setInterval(()=>postMessage(1),e.data)}'
     let worker: Worker | null = null
@@ -69,9 +88,35 @@ export default function App() {
       return () => clearInterval(id)
     }
     return () => worker?.terminate()
-  }, [currentUser, onboarded, speed])
+  }, [currentUser, onboarded, speed, mode])
 
-  if (!currentUser) return showAuth ? <Auth /> : <Landing onLaunch={() => setShowAuth(true)} />
+  if (mode === 'detecting') {
+    return <div className="auth-wrap"><div className="small">Connecting…</div></div>
+  }
+
+  // Remote mode requires the server access token before anything else
+  if (mode === 'remote' && (!remote.token || remote.unauthorized)) {
+    return (
+      <div className="auth-wrap">
+        <div className="auth-card">
+          <div className="row" style={{ marginBottom: 14 }}>
+            <div className="logo-mark">A</div>
+            <div className="logo-name" style={{ fontSize: 17 }}>AutoAlpha<span>AI</span></div>
+          </div>
+          <h1>Server access</h1>
+          <p className="sub">This console is connected to a 24/7 AutoAlpha server. Enter the server's access token
+            (the AUTH_TOKEN it was started with).{remote.unauthorized && remote.token ? ' The previous token was rejected.' : ''}</p>
+          <form onSubmit={e => { e.preventDefault(); if (tokenDraft.trim()) { startRemote(tokenDraft.trim()); forceRender(x => x + 1) } }}>
+            <div className="field"><label>Access token</label>
+              <input type="password" value={tokenDraft} onChange={e => setTokenDraft(e.target.value)} placeholder="••••••••" autoComplete="off" /></div>
+            <button className="btn primary" style={{ width: '100%' }}>Connect</button>
+          </form>
+        </div>
+      </div>
+    )
+  }
+
+  if (!currentUser) return showAuth || mode === 'remote' ? <Auth /> : <Landing onLaunch={() => setShowAuth(true)} />
   if (!onboarded) return <Onboarding />
 
   return (

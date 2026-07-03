@@ -18,6 +18,31 @@ npm run build      # production build → dist/
 
 Or open `dist/index.html` directly in a browser (the build uses relative paths).
 
+## 24/7 server mode (trades with the browser closed)
+
+The same engine runs headless in Node with file persistence. The web UI, when served
+by this daemon, automatically becomes a remote control panel (token-gated) — the
+engine keeps trading whether or not any browser is open.
+
+```bash
+npm install && npm run build
+AUTH_TOKEN=pick-a-strong-secret npm run server     # http://localhost:8787
+```
+
+Keep it alive across reboots with pm2:
+
+```bash
+npm i -g pm2
+AUTH_TOKEN=pick-a-strong-secret pm2 start "npm run server" --name autoalpha
+pm2 save && pm2 startup    # follow the printed instruction once
+```
+
+- **Env**: `PORT` (default 8787), `DATA_DIR` (default ./server-data), `AUTH_TOKEN` (required in practice — anyone who can reach the port without it controls the engine).
+- **One process = one trading workspace.** Each friend runs their own instance: different `PORT` + `DATA_DIR` (and ideally their own machine, since broker credentials live in `DATA_DIR`).
+- **Where to run it**: any always-on machine — a spare Mac/PC, Raspberry Pi, or a small VPS. For remote access from your phone, put it behind Tailscale or a reverse proxy with HTTPS; do not expose the raw port to the internet.
+- **IBKR note**: server-side calls to your Client Portal Gateway have no browser CORS restrictions, so the gateway integration works best in this mode. The gateway itself must also stay running and logged in ([Certain] IBKR sessions require periodic re-authentication — check the Brokers page health status).
+- State persists in `DATA_DIR/storage.json` — back it up if you care about trade history.
+
 ## Try the full journey
 
 1. Sign up (any email/password — accounts are stored locally in your browser).
