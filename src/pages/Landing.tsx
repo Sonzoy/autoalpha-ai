@@ -44,7 +44,7 @@ export default function Landing({ onLaunch }: { onLaunch: () => void }) {
               <span className="badge green"><span className="dot" />AI ACTIVE</span>
             </div>
             <div className="grid g2" style={{ gap: 10 }}>
-              <div><div className="stat-label">Portfolio value</div><div className="stat-value" style={{ fontSize: 19 }}>$103,418</div></div>
+              <div><div className="stat-label">Portfolio value</div><div className="stat-value" style={{ fontSize: 19 }}>$100,000</div></div>
               <div><div className="stat-label">Strategy mode</div><div className="stat-value info" style={{ fontSize: 15, paddingTop: 4 }}>Trend Momentum</div></div>
               <div><div className="stat-label">Open positions</div><div className="stat-value" style={{ fontSize: 19 }}>3</div></div>
               <div><div className="stat-label">Market regime</div><div className="stat-value pos" style={{ fontSize: 15, paddingTop: 4 }}>Trending</div></div>
@@ -55,7 +55,6 @@ export default function Landing({ onLaunch }: { onLaunch: () => void }) {
                   fill="none" stroke="var(--blue)" strokeWidth="2" />
               </svg>
             </div>
-            <p className="small">Illustrative interface. Simulated figures — not a performance claim.</p>
           </div>
         </div>
       </header>
