@@ -28,18 +28,28 @@ export default function App() {
   const [mode, setMode] = useState<'detecting' | 'local' | 'remote'>('detecting')
   const [tokenDraft, setTokenDraft] = useState('')
   const [, forceRender] = useState(0)
+  const remoteUnauthorized = useStore(s => s.remoteUnauthorized)
 
   // Detect the 24/7 server daemon: if present, the browser becomes a remote
-  // control panel and the local engine stays off.
+  // control panel and the local engine stays off. Retries cover the window
+  // where the server is mid-restart at page load.
   useEffect(() => {
-    void detectServer().then(isServer => {
-      if (isServer) {
-        setMode('remote')
-        if (remote.token) startRemote(remote.token)
-      } else {
-        setMode('local')
+    let cancelled = false
+    const detect = async () => {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        if (cancelled) return
+        if (await detectServer()) {
+          if (cancelled) return
+          setMode('remote')
+          if (remote.token) startRemote(remote.token)
+          return
+        }
+        await new Promise(r => setTimeout(r, 1200))
       }
-    })
+      if (!cancelled) setMode('local')
+    }
+    void detect()
+    return () => { cancelled = true }
   }, [])
 
   // Apply theme to the document root
@@ -97,8 +107,11 @@ export default function App() {
     return <div className="auth-wrap"><div className="small">Connecting…</div></div>
   }
 
-  // Remote mode requires the server access token before anything else
-  if (mode === 'remote' && (!remote.token || remote.unauthorized)) {
+  // Remote mode requires the server access token before anything else.
+  // remoteUnauthorized is reactive store state, so a token that stops
+  // working (e.g. server restarted with a new AUTH_TOKEN) brings this
+  // screen back instead of leaving a silently dead UI.
+  if (mode === 'remote' && (!remote.token || remoteUnauthorized)) {
     return (
       <div className="auth-wrap">
         <div className="auth-card">

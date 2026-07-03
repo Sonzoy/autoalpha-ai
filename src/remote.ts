@@ -51,12 +51,19 @@ export async function remoteBrokerSync(id: BrokerId): Promise<void> {
 async function poll(): Promise<void> {
   try {
     const r = await fetch('api/state', { headers: headers(), signal: AbortSignal.timeout(5000) })
-    if (r.status === 401) { remote.unauthorized = true; return }
-    if (!r.ok) return
+    if (r.status === 401) {
+      // Token mismatch must be VISIBLE, not a silent death of every control
+      remote.unauthorized = true
+      useStore.setState({ remoteUnauthorized: true } as any)
+      return
+    }
+    if (!r.ok) { useStore.setState({ serverOk: false } as any); return }
     remote.unauthorized = false
     const j = await r.json()
-    useStore.setState(j) // data only — action functions are preserved by zustand's merge
-  } catch { /* transient network issue — next poll retries */ }
+    useStore.setState({ ...j, remoteUnauthorized: false, serverOk: true }) // data only — actions preserved by merge
+  } catch {
+    useStore.setState({ serverOk: false } as any) // visible "server unreachable" state
+  }
 }
 
 /** Replace store actions with server-forwarding versions. */
@@ -68,7 +75,16 @@ function wrapActions(): void {
     'setFirstLiveOrderAuthorized', 'setMarketKey', 'addCustomFeed', 'removeCustomFeed', 'setBrokerConfig'
   ]
   const patch: Record<string, unknown> = {}
-  for (const n of forward) patch[n] = (...args: unknown[]) => { void send(n, args).then(() => poll()) }
+  const originals: Record<string, (...a: unknown[]) => unknown> = {}
+  for (const n of forward) originals[n] = (useStore.getState() as any)[n]
+  for (const n of forward) {
+    patch[n] = (...args: unknown[]) => {
+      // Optimistic: apply locally for INSTANT feedback, then forward — the
+      // next poll replaces local state with the server's authoritative truth.
+      try { originals[n]?.(...args) } catch { /* server result wins anyway */ }
+      void send(n, args).then(() => poll())
+    }
+  }
   // auth actions return Promise<string|null> (error message or null)
   patch.signUp = async (...args: unknown[]) => { const r = await send('signUp', args); await poll(); return r }
   patch.logIn = async (...args: unknown[]) => { const r = await send('logIn', args); await poll(); return r }

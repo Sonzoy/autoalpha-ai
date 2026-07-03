@@ -9,6 +9,7 @@ import { Modal } from './ui'
 import { useStore } from '../store/store'
 import { Badge, Segmented, Toggle } from './ui'
 import { DISCLAIMER_SHORT } from '../types'
+import { remote } from '../remote'
 
 const TITLES: Record<string, string> = {
   '/': 'Trading Dashboard', '/strategy': 'Strategy Engine', '/history': 'Trade History',
@@ -27,6 +28,7 @@ export default function Layout() {
   const autoPaused = useStore(s => s.autoPaused)
   const killSwitch = useStore(s => s.killSwitch)
   const brokerConn = useStore(s => s.brokerConn)
+  const serverOk = useStore(s => s.serverOk)
   const logOut = useStore(s => s.logOut)
   const theme = useStore(s => s.theme)
   const setTheme = useStore(s => s.setTheme)
@@ -78,6 +80,7 @@ export default function Layout() {
             <button className={tradingMode === 'live' ? 'active' : ''} style={tradingMode === 'live' ? { background: 'var(--red)' } : undefined} onClick={() => switchMode('live')}>LIVE</button>
           </div>
           {/* Quiet by default — status badges appear only when something needs attention */}
+          {remote.active && !serverOk && <Badge tone="red">SERVER UNREACHABLE</Badge>}
           {!paperOk && <Badge tone="red">Broker offline</Badge>}
           {killSwitch && <Badge tone="red">KILL SWITCH</Badge>}
           {autoPaused && <Badge tone="amber">RISK PAUSED</Badge>}

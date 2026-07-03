@@ -177,6 +177,10 @@ function persistNow(s: AppState): void {
 export interface AppState extends Workspace {
   users: StoredUser[]
   currentUser: string | null
+  // Volatile remote-connection health (never persisted): drives visible
+  // warnings instead of silent failures
+  remoteUnauthorized: boolean
+  serverOk: boolean
   signUp: (name: string, email: string, password: string) => Promise<string | null>
   logIn: (email: string, password: string) => Promise<string | null>
   logOut: () => void
@@ -224,6 +228,8 @@ export const useStore = create<AppState>()((set, get) => ({
   ...bootWs,
   users: boot.users,
   currentUser: boot.currentUser,
+  remoteUnauthorized: false,
+  serverOk: true,
 
   signUp: async (name, email, password) => {
     if (get().users.some(u => u.email === email)) return 'An account with this email already exists.'

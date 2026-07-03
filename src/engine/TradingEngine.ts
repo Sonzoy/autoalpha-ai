@@ -43,6 +43,30 @@ let connectingPaper = false
 
 const STABLES = new Set(['USDT', 'USDC', 'FDUSD', 'BUSD', 'DAI', 'TUSD'])
 
+let lastBinanceAttempt = 0
+
+/**
+ * Self-heal the Binance connection after restarts: if credentials are
+ * configured but the adapter is disconnected, reconnect automatically
+ * (once a minute) — live trading must not silently stop because the
+ * process restarted.
+ */
+function ensureBinanceConnected(): void {
+  const s = useStore.getState()
+  const bn = brokers.binance as any
+  if (!s.brokerConfig?.binance || bn.status() !== 'disconnected') return
+  if (Date.now() - lastBinanceAttempt < 60_000) return
+  lastBinanceAttempt = Date.now()
+  bn.configure(s.brokerConfig.binance)
+  void bn.connect().then((r: any) => {
+    useStore.getState().setBrokerConn('binance', {
+      status: bn.status(), message: r.message, permissions: r.permissions,
+      healthy: bn.healthy(), lastSync: r.ok ? Date.now() : null
+    })
+    if (r.ok) AuditLogger.info('BROKER', 'Binance auto-reconnected after restart')
+  }).catch(() => { /* retried next minute */ })
+}
+
 /**
  * Refresh the REAL account snapshot from the connected broker (Binance)
  * every 60s — the dashboard shows this as the authoritative portfolio in
@@ -105,6 +129,7 @@ async function tick(): Promise<void> {
   const st = useStore.getState()
   if (!st.currentUser || !st.profile.onboarded) return
   ensurePaperConnected()
+  ensureBinanceConnected()
   syncBrokerPortfolio()
 
   // 1–2. Market data + sentiment update
