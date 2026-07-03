@@ -5,6 +5,7 @@ import { AuditLogger } from './AuditLogger'
 import { PaperBrokerAdapter } from './brokers/PaperBrokerAdapter'
 import { IBKRBrokerAdapter } from './brokers/IBKRBrokerAdapter'
 import { EToroBrokerAdapter } from './brokers/EToroBrokerAdapter'
+import { BinanceBrokerAdapter } from './brokers/BinanceBrokerAdapter'
 import type { BrokerAdapter } from './brokers/BrokerAdapter'
 import type { BrokerId, Position, PriceSource, Trade } from '../types'
 import { MarketDataService } from './MarketDataService'
@@ -21,7 +22,15 @@ import { computeEquity, positionPnl, positionValue, useStore } from '../store/st
 export const brokers: Record<BrokerId, BrokerAdapter> = {
   paper: new PaperBrokerAdapter(),
   ibkr: new IBKRBrokerAdapter(),
-  etoro: new EToroBrokerAdapter()
+  etoro: new EToroBrokerAdapter(),
+  binance: new BinanceBrokerAdapter()
+}
+
+/** The healthy real-broker adapter live orders route to (IBKR preferred). */
+export function liveAdapter(): BrokerAdapter | null {
+  if (brokers.ibkr.healthy()) return brokers.ibkr
+  if (brokers.binance.healthy()) return brokers.binance
+  return null
 }
 
 let sim: MarketSimulator | null = null
@@ -159,7 +168,7 @@ async function tick(): Promise<void> {
     // emergency stop / kill switch flatten
     if (!closeReason && (s.emergencyStop || s.killSwitch)) closeReason = s.killSwitch ? 'Kill switch: flattening positions' : 'Emergency stop: flattening positions'
 
-    if (closeReason) closePosition(pos, price, closeReason)
+    if (closeReason) await closePosition(pos, price, closeReason)
   }
 
   // 4. Equity, peak, perf, portfolio guards
@@ -234,7 +243,7 @@ async function tick(): Promise<void> {
   const trade: Trade = {
     id: `tr-${Date.now()}-${Math.floor(Math.random() * 1e4)}`,
     symbol: prop.symbol, market: prop.market,
-    broker: s.tradingMode === 'live' ? 'ibkr' : 'paper',
+    broker: s.tradingMode === 'live' ? (liveAdapter()?.id ?? 'paper') : 'paper',
     direction: prop.direction, entryPrice: price, qty,
     stopLoss: round4(stopLoss), takeProfit: round4(takeProfit),
     pnl: 0, strategy: prop.strategy, confidence: prop.confidence,
@@ -251,13 +260,14 @@ async function tick(): Promise<void> {
   useStore.getState().patchTrade(trade.id, { status: 'Approved' })
   AuditLogger.info('RISK', `Trade approved: ${prop.symbol}`, decision.summary)
 
-  // Adapter routing: live mode routes to IBKR only when the full chain is
-  // satisfied — mode=live, unlock chain complete, gateway healthy, and the
-  // user has explicitly pre-authorized live orders.
-  const liveReady = s.tradingMode === 'live' && s.liveUnlocked && s.adminApprovedLive && brokers.ibkr.healthy()
+  // Adapter routing: live mode routes to a healthy real broker (IBKR gateway
+  // preferred, then Binance spot) only when the full chain is satisfied —
+  // mode=live, unlock chain complete, and explicit first-order authorization.
+  const realBroker = liveAdapter()
+  const liveReady = s.tradingMode === 'live' && s.liveUnlocked && s.adminApprovedLive && !!realBroker
   if (s.tradingMode === 'live' && !liveReady) {
-    useStore.getState().patchTrade(trade.id, { status: 'Rejected', closeReason: 'Live mode selected but live routing prerequisites are not met (unlock chain + healthy IBKR gateway required).' })
-    AuditLogger.warn('ORDER', `Live order blocked: ${prop.symbol}`, 'Unlock chain incomplete or gateway unhealthy.')
+    useStore.getState().patchTrade(trade.id, { status: 'Rejected', closeReason: 'Live mode selected but live routing prerequisites are not met (unlock chain + a healthy connected broker required).' })
+    AuditLogger.warn('ORDER', `Live order blocked: ${prop.symbol}`, 'Unlock chain incomplete or no healthy real broker.')
     return
   }
   if (liveReady && !s.firstLiveOrderAuthorized) {
@@ -265,7 +275,7 @@ async function tick(): Promise<void> {
     AuditLogger.warn('ORDER', `Live order held: ${prop.symbol}`, 'User has not pre-authorized the first live order.')
     return
   }
-  const adapter = liveReady ? brokers.ibkr : brokers.paper
+  const adapter = liveReady && realBroker ? realBroker : brokers.paper
   const preview = adapter.previewOrder({
     symbol: prop.symbol, market: prop.market, direction: prop.direction,
     qty, refPrice: price, stopLoss, takeProfit, mode: s.tradingMode
@@ -303,7 +313,27 @@ async function tick(): Promise<void> {
     `Stop ${trade.stopLoss}, target ${trade.takeProfit}. ${prop.rationale}`)
 }
 
-function closePosition(p: Position, price: number, reason: string): void {
+async function closePosition(p: Position, price: number, reason: string): Promise<void> {
+  // Live positions must be closed at the broker with a REAL opposite order —
+  // ledger bookkeeping alone would leave the actual position open.
+  const trade = useStore.getState().trades.find(t => t.id === p.tradeId)
+  if (trade && trade.broker !== 'paper') {
+    const adapter = brokers[trade.broker]
+    const closeReq = {
+      symbol: p.symbol, market: p.market,
+      direction: (p.direction === 'Long' ? 'Short' : 'Long') as Position['direction'],
+      qty: p.qty, refPrice: price, stopLoss: 0, takeProfit: 0,
+      mode: 'live' as const, reduceOnly: true
+    }
+    const preview = adapter.previewOrder(closeReq, Number.MAX_SAFE_INTEGER)
+    const result = preview.ok ? await adapter.placeOrder(preview) : { ok: false as const, reason: preview.note }
+    if (!result.ok || !('fillPrice' in result) || !result.fillPrice) {
+      AuditLogger.error('ORDER', `LIVE close FAILED for ${p.symbol} — position kept open, will retry next cycle`,
+        `Reason: ${'reason' in result ? result.reason : 'no fill price'}. Check the broker connection; your broker account is authoritative.`)
+      return // do not touch the ledger — retry on the next tick
+    }
+    price = result.fillPrice
+  }
   const pnl = positionPnl(p, price)
   const proceeds = positionValue(p, price)
   const commission = Math.max(1, proceeds * 0.0005)

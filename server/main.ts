@@ -53,6 +53,7 @@ async function main() {
     const s = useStore.getState()
     ;(brokers.ibkr as any).configure(s.brokerConfig?.ibkr ?? null)
     ;(brokers.etoro as any).configure(s.brokerConfig?.etoro ?? null)
+    ;(brokers.binance as any).configure(s.brokerConfig?.binance ?? null)
   }
   hydrateAdapters()
 
@@ -125,7 +126,7 @@ async function main() {
 
   // Broker connect/sync run server-side (no browser CORS limits here)
   app.post('/api/broker/:id/connect', auth, async (req, res) => {
-    const id = req.params.id as 'paper' | 'ibkr' | 'etoro'
+    const id = req.params.id as 'paper' | 'ibkr' | 'etoro' | 'binance'
     if (!brokers[id]) return res.status(400).json({ error: 'unknown broker' })
     const r = await brokers[id].connect()
     useStore.getState().setBrokerConn(id, {
@@ -135,7 +136,7 @@ async function main() {
     res.json(r)
   })
   app.post('/api/broker/:id/sync', auth, async (req, res) => {
-    const id = req.params.id as 'paper' | 'ibkr' | 'etoro'
+    const id = req.params.id as 'paper' | 'ibkr' | 'etoro' | 'binance'
     if (!brokers[id]) return res.status(400).json({ error: 'unknown broker' })
     const r = await brokers[id].sync()
     useStore.getState().setBrokerConn(id, { message: r.message, healthy: brokers[id].healthy(), status: brokers[id].status(), ...(r.ok ? { lastSync: Date.now() } : {}) })

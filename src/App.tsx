@@ -53,6 +53,7 @@ export default function App() {
     const st = useStore.getState()
     ;(brokers.ibkr as any).configure(st.brokerConfig?.ibkr ?? null)
     ;(brokers.etoro as any).configure(st.brokerConfig?.etoro ?? null)
+    ;(brokers.binance as any).configure(st.brokerConfig?.binance ?? null)
   }, [currentUser])
 
   // Ensure the paper venue is connected once the user is in the console.

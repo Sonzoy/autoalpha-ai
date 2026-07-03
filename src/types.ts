@@ -11,7 +11,7 @@ export type StrategyName =
   | 'Cash / Risk-Off'
 export type Direction = 'Long' | 'Short'
 export type OrderStatus = 'Proposed' | 'Approved' | 'Submitted' | 'Filled' | 'Rejected' | 'Closed'
-export type BrokerId = 'paper' | 'ibkr' | 'etoro'
+export type BrokerId = 'paper' | 'ibkr' | 'etoro' | 'binance'
 export type BrokerStatus = 'disconnected' | 'connecting' | 'connected' | 'error'
 export type TradingMode = 'paper' | 'live'
 export type SimSpeed = 1 | 10 | 60
@@ -193,6 +193,11 @@ export interface IbkrConfig {
 export interface EtoroConfig {
   username: string
   apiKey: string
+}
+
+export interface BinanceConfig {
+  apiKey: string
+  apiSecret: string
 }
 
 export const RISK_DEFAULTS: Record<RiskProfile, RiskSettings> = {

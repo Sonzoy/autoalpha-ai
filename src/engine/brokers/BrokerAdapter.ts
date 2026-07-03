@@ -16,6 +16,9 @@ export interface OrderRequest {
   stopLoss: number
   takeProfit: number
   mode: TradingMode
+  /** True when this order closes/reduces an existing position (e.g. selling
+   *  a held spot asset) — lets spot venues allow "Short" close orders. */
+  reduceOnly?: boolean
 }
 
 export interface OrderPreview {

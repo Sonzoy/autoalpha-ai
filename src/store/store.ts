@@ -1,8 +1,8 @@
 import { create } from 'zustand'
 import type {
-  AssetState, AuditEvent, BrokerConnState, BrokerId, CustomFeed, EtoroConfig, IbkrConfig,
-  IntelSnapshot, PerfPoint, Position, PriceSource, Regime, RiskSettings, SimSpeed, StrategyName,
-  ThemeMode, Trade, TradingMode, UserProfile
+  AssetState, AuditEvent, BinanceConfig, BrokerConnState, BrokerId, CustomFeed, EtoroConfig,
+  IbkrConfig, IntelSnapshot, PerfPoint, Position, PriceSource, Regime, RiskSettings, SimSpeed,
+  StrategyName, ThemeMode, Trade, TradingMode, UserProfile
 } from '../types'
 import { RISK_DEFAULTS } from '../types'
 import { AuditLogger } from '../engine/AuditLogger'
@@ -43,7 +43,8 @@ const emptyProfile: UserProfile = {
 const initialBrokerConn = (): Record<BrokerId, BrokerConnState> => ({
   paper: { status: 'disconnected', message: 'Not initialized', lastSync: null, permissions: [], healthy: false },
   ibkr: { status: 'disconnected', message: 'Not connected', lastSync: null, permissions: [], healthy: false },
-  etoro: { status: 'disconnected', message: 'Not connected', lastSync: null, permissions: [], healthy: false }
+  etoro: { status: 'disconnected', message: 'Not connected', lastSync: null, permissions: [], healthy: false },
+  binance: { status: 'disconnected', message: 'Not connected', lastSync: null, permissions: [], healthy: false }
 })
 
 export interface Workspace {
@@ -73,7 +74,7 @@ export interface Workspace {
   perf: PerfPoint[]
   audit: AuditEvent[]
   brokerConn: Record<BrokerId, BrokerConnState>
-  brokerConfig: { ibkr: IbkrConfig | null; etoro: EtoroConfig | null }
+  brokerConfig: { ibkr: IbkrConfig | null; etoro: EtoroConfig | null; binance: BinanceConfig | null }
   marketKeys: { finnhub: string }
   customFeeds: CustomFeed[]
   theme: ThemeMode
@@ -95,7 +96,7 @@ export function freshWorkspace(): Workspace {
     cash: START_CASH, dayStartEquity: START_CASH, peakEquity: START_CASH,
     dayStamp: new Date().toDateString(), positions: [], trades: [], perf: [], audit: [],
     brokerConn: initialBrokerConn(),
-    brokerConfig: { ibkr: null, etoro: null },
+    brokerConfig: { ibkr: null, etoro: null, binance: null },
     marketKeys: { finnhub: '' },
     customFeeds: [],
     theme: 'dark',
@@ -188,7 +189,7 @@ export interface AppState extends Workspace {
   pushPerf: (p: PerfPoint) => void
   addAudit: (e: AuditEvent) => void
   setBrokerConn: (id: BrokerId, patch: Partial<BrokerConnState>) => void
-  setBrokerConfig: (id: 'ibkr' | 'etoro', cfg: IbkrConfig | EtoroConfig | null) => void
+  setBrokerConfig: (id: 'ibkr' | 'etoro' | 'binance', cfg: IbkrConfig | EtoroConfig | BinanceConfig | null) => void
   setMarketKey: (provider: 'finnhub', key: string) => void
   addCustomFeed: (f: CustomFeed) => void
   removeCustomFeed: (id: string) => void

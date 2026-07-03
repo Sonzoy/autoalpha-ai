@@ -35,6 +35,17 @@ export default function Brokers() {
   // eToro config form state
   const [etUser, setEtUser] = useState(brokerConfig.etoro?.username ?? '')
   const [etKey, setEtKey] = useState(brokerConfig.etoro?.apiKey ?? '')
+  // Binance config form state
+  const [bnKey, setBnKey] = useState(brokerConfig.binance?.apiKey ?? '')
+  const [bnSecret, setBnSecret] = useState(brokerConfig.binance?.apiSecret ?? '')
+  const [editBinance, setEditBinance] = useState(false)
+
+  const saveBinance = () => {
+    const cfg = bnKey.trim() && bnSecret.trim() ? { apiKey: bnKey.trim(), apiSecret: bnSecret.trim() } : null
+    setBrokerConfig('binance', cfg)
+    ;(brokers.binance as any).configure(cfg)
+    setBrokerConn('binance', { message: cfg ? 'API key saved locally — not yet connected.' : 'Configuration cleared.', status: 'disconnected', healthy: false })
+  }
 
   const saveIbkr = () => {
     const cfg = gatewayUrl.trim() ? { gatewayUrl: gatewayUrl.trim(), accountId: accountId.trim() } : null
@@ -170,6 +181,30 @@ export default function Brokers() {
 
       {card('paper')}
       {card('ibkr', ibkrForm)}
+      {card('binance', (
+        <div className="mb" style={{ padding: 12, background: 'var(--bg-3)', borderRadius: 8 }}>
+          <div className="row spread wrap" style={{ marginBottom: editBinance ? 8 : 0 }}>
+            <span className="row"><KeyRound size={13} color="var(--blue)" /><strong style={{ fontSize: 12.5 }}>API setup — Binance key + secret</strong>
+              {!editBinance && <span className="small" style={{ marginLeft: 8 }}>
+                {brokerConfig.binance ? `configured (key ${mask(brokerConfig.binance.apiKey)})` : 'not configured'}
+              </span>}
+            </span>
+            {!editBinance && <button className="btn ghost sm" onClick={() => setEditBinance(true)}>Edit</button>}
+          </div>
+          {editBinance && <>
+            <p className="small mb">Create the key in Binance → API Management. Enable <strong>only Read + Spot Trading</strong>,
+              <strong> disable withdrawals</strong>, and IP-restrict it to your server. Spot is long-only — short signals are skipped.
+              Use this with the 24/7 server (browsers may be blocked by CORS, and secrets don't belong in a web page).</p>
+            <div className="field"><label>API key</label>
+              <input type="password" value={bnKey} onChange={e => setBnKey(e.target.value)} autoComplete="off" placeholder="••••••••••••" /></div>
+            <div className="field"><label>API secret</label>
+              <input type="password" value={bnSecret} onChange={e => setBnSecret(e.target.value)} autoComplete="off" placeholder="••••••••••••" /></div>
+            <button className="btn sm" onClick={() => { saveBinance(); setEditBinance(false) }}>{brokerConfig.binance ? 'Update' : 'Save'}</button>
+            <button className="btn ghost sm" style={{ marginLeft: 8 }} onClick={() => setEditBinance(false)}>Cancel</button>
+            {brokerConfig.binance && <button className="btn ghost sm" style={{ marginLeft: 8 }} onClick={() => { setBnKey(''); setBnSecret(''); setBrokerConfig('binance', null); (brokers.binance as any).configure(null); setEditBinance(false) }}>Clear config</button>}
+          </>}
+        </div>
+      ))}
       {card('etoro', etoroForm)}
 
       <div className="card" style={{ borderColor: liveUnlocked ? 'var(--green)' : 'var(--amber)' }}>
@@ -180,7 +215,7 @@ export default function Brokers() {
         <p className="muted mb">{LIVE_LOCK_MESSAGE}</p>
         <div className="grid g2" style={{ gap: 8 }}>
           {[
-            { label: 'Real broker connected (IBKR or eToro)', ok: brokerConn.ibkr.status === 'connected' || brokerConn.etoro.status === 'connected' },
+            { label: 'Real broker connected (IBKR, Binance, or eToro)', ok: brokerConn.ibkr.status === 'connected' || brokerConn.binance.status === 'connected' || brokerConn.etoro.status === 'connected' },
             { label: 'User authorization requested', ok: liveRequested },
             { label: 'Risk acknowledgement on file', ok: profile.riskAcknowledged },
             { label: 'Compliance review & admin approval', ok: adminApprovedLive }
@@ -195,7 +230,7 @@ export default function Brokers() {
           {!liveRequested && <button className="btn sm" onClick={requestLive}>Request live trading unlock</button>}
           {liveRequested && !adminApprovedLive && <Badge tone="amber">Pending admin approval (Admin Console)</Badge>}
           {liveRequested && adminApprovedLive && !liveUnlocked &&
-            <button className="btn success sm" disabled={brokerConn.ibkr.status !== 'connected' && brokerConn.etoro.status !== 'connected'}
+            <button className="btn success sm" disabled={brokerConn.ibkr.status !== 'connected' && brokerConn.binance.status !== 'connected' && brokerConn.etoro.status !== 'connected'}
               onClick={() => setConfirmLive(true)}>Enable live trading</button>}
           {liveUnlocked && <button className="btn danger sm" onClick={() => { setLiveUnlocked(false); setFirstLiveOrderAuthorized(false) }}>Re-lock live trading</button>}
         </div>
