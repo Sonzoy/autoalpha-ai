@@ -7,7 +7,7 @@ import { IBKRBrokerAdapter } from './brokers/IBKRBrokerAdapter'
 import { EToroBrokerAdapter } from './brokers/EToroBrokerAdapter'
 import { BinanceBrokerAdapter } from './brokers/BinanceBrokerAdapter'
 import type { BrokerAdapter } from './brokers/BrokerAdapter'
-import type { BrokerId, Position, PriceSource, Trade } from '../types'
+import type { AssetState, BrokerId, Position, PriceSource, Trade } from '../types'
 import { MarketDataService } from './MarketDataService'
 import { freshWsQuotes, startStream } from './LiveStream'
 import { computeEquity, positionPnl, positionValue, useStore } from '../store/store'
@@ -26,11 +26,27 @@ export const brokers: Record<BrokerId, BrokerAdapter> = {
   binance: new BinanceBrokerAdapter()
 }
 
-/** The healthy real-broker adapter live orders route to (IBKR preferred). */
+/** The healthy real-broker adapter live orders route to. */
 export function liveAdapter(): BrokerAdapter | null {
-  if (brokers.ibkr.healthy()) return brokers.ibkr
+  const preferred = useStore.getState().profile.broker
+  if (preferred === 'binance') return brokers.binance.healthy() ? brokers.binance : null
+  if (preferred === 'ibkr') return brokers.ibkr.healthy() ? brokers.ibkr : null
   if (brokers.binance.healthy()) return brokers.binance
+  if (brokers.ibkr.healthy()) return brokers.ibkr
   return null
+}
+
+function activeBrokerHealthy(): boolean {
+  return useStore.getState().tradingMode === 'live' ? !!liveAdapter() : brokers.paper.healthy()
+}
+
+function equityBasis(assets: AssetState[]): { equity: number; live: boolean } {
+  const s = useStore.getState()
+  const live = s.tradingMode === 'live' && !!s.brokerPortfolio && s.brokerPortfolio.totalUsd > 0
+  return {
+    equity: live ? s.brokerPortfolio!.totalUsd : computeEquity({ cash: s.cash, positions: s.positions, assets }),
+    live
+  }
 }
 
 let sim: MarketSimulator | null = null
@@ -180,7 +196,7 @@ async function tick(): Promise<void> {
   // Day roll
   if (new Date().toDateString() !== st.dayStamp) {
     simulator.rollDay()
-    const eq = computeEquity({ cash: st.cash, positions: st.positions, assets })
+    const eq = equityBasis(assets).equity
     useStore.getState().rollDay(eq)
     AuditLogger.info('SYSTEM', 'New trading day — daily P&L counters reset')
   }
@@ -224,15 +240,18 @@ async function tick(): Promise<void> {
     if (closeReason) await closePosition(pos, price, closeReason)
   }
 
-  // 4. Equity, peak, perf, portfolio guards
+  // 4. Equity, peak, perf, portfolio guards.
+  // In live mode with a synced real account, ALL of these run on the REAL
+  // account value — the risk guards protect actual money, and the equity
+  // curve shows the actual account. The paper ledger is used only in paper mode.
   {
     const s = useStore.getState()
-    const equity = computeEquity({ cash: s.cash, positions: s.positions, assets })
+    const { equity, live } = equityBasis(assets)
     if (equity > s.peakEquity) useStore.getState().setPeak(equity)
     const s2 = useStore.getState()
     const drawdown = s2.peakEquity > 0 ? ((equity - s2.peakEquity) / s2.peakEquity) * 100 : 0
     const dailyPnl = equity - s2.dayStartEquity
-    useStore.getState().pushPerf({ ts: Date.now(), equity, drawdown: round2(drawdown), dailyPnl: round2(dailyPnl) })
+    useStore.getState().pushPerf({ ts: Date.now(), equity, drawdown: round2(drawdown), dailyPnl: round2(dailyPnl), live })
 
     if (s2.autoTrading && !s2.autoPaused) {
       const guard = RiskManager.portfolioGuards(riskCtx(equity))
@@ -248,13 +267,13 @@ async function tick(): Promise<void> {
   const s = useStore.getState()
   // Clear a stale "broker unhealthy" note once the link has recovered
   // (unconditional — the note must never outlive the condition it describes)
-  if (brokers.paper.healthy() && s.engineNote.startsWith('Broker link unhealthy')) {
+  if (activeBrokerHealthy() && s.engineNote.startsWith('Broker link unhealthy')) {
     useStore.getState().setEngineStatus(s.engineMode, 'Scanning for qualified setups.', s.lastConfidence)
   }
   if (!s.autoTrading || s.autoPaused || s.emergencyStop || s.killSwitch) return
   if (ticksSinceTrade < 5 || Math.random() > 0.45) return
   // Don't generate proposals while the broker link is unhealthy — wait for recovery
-  if (!brokers.paper.healthy()) {
+  if (!activeBrokerHealthy()) {
     useStore.getState().setEngineStatus(s.engineMode, 'Broker link unhealthy — holding new proposals until connection recovers.', 0)
     return
   }
@@ -285,16 +304,12 @@ async function tick(): Promise<void> {
   useStore.getState().setEngineStatus(prop.strategy, selection.note, prop.confidence)
   AuditLogger.info('STRATEGY', `Proposal: ${prop.direction} ${prop.symbol} via ${prop.strategy} (confidence ${prop.confidence})`, prop.rationale)
 
-  const equity = computeEquity({ cash: s.cash, positions: s.positions, assets })
+  const { equity } = equityBasis(assets)
   const decision = RiskManager.check(prop, riskCtx(equity))
 
   const price = priceOf(prop.symbol)
-  // Live mode with a synced real account: size orders from REAL equity —
-  // the internal ledger is only a mirror.
-  const sizingEquity = (s.tradingMode === 'live' && s.brokerPortfolio && s.brokerPortfolio.totalUsd > 0)
-    ? s.brokerPortfolio.totalUsd
-    : equity
-  const qty = roundQty((sizingEquity * prop.allocationPct / 100) / price)
+  // Live mode with a synced real account: size orders from REAL equity.
+  const qty = roundQty((equity * prop.allocationPct / 100) / price)
   const stopLoss = prop.direction === 'Long' ? price * (1 - prop.stopLossPct / 100) : price * (1 + prop.stopLossPct / 100)
   const takeProfit = prop.direction === 'Long' ? price * (1 + prop.takeProfitPct / 100) : price * (1 - prop.takeProfitPct / 100)
 
@@ -422,7 +437,7 @@ function riskCtx(equity: number): RiskContext {
     dayStartEquity: s.dayStartEquity, peakEquity: s.peakEquity,
     positions: s.positions, mode: s.tradingMode,
     liveUnlocked: s.liveUnlocked && s.adminApprovedLive,
-    brokerHealthy: brokers.paper.healthy(),
+    brokerHealthy: activeBrokerHealthy(),
     emergencyStop: s.emergencyStop, killSwitch: s.killSwitch, autoPaused: s.autoPaused
   }
 }

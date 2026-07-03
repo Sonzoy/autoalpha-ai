@@ -350,8 +350,16 @@ export const useStore = create<AppState>()((set, get) => ({
     AuditLogger[v ? 'warn' : 'info']('USER', v ? 'First live order pre-authorized by user' : 'Live order pre-authorization revoked')
   },
   setTradingMode: m => {
-    set({ tradingMode: m })
-    AuditLogger[m === 'live' ? 'warn' : 'info']('USER', m === 'live' ? 'Trading mode switched to LIVE' : 'Trading mode switched to PAPER')
+    // Rebase daily-loss / drawdown baselines to the new mode's equity basis —
+    // otherwise the paper↔live equity jump would instantly trip the guards.
+    const s = get()
+    const basis = m === 'live' && s.brokerPortfolio && s.brokerPortfolio.totalUsd > 0
+      ? s.brokerPortfolio.totalUsd
+      : computeEquity({ cash: s.cash, positions: s.positions, assets: s.assets })
+    set({ tradingMode: m, dayStartEquity: basis, peakEquity: basis, dayStamp: new Date().toDateString() })
+    AuditLogger[m === 'live' ? 'warn' : 'info']('USER',
+      m === 'live' ? 'Trading mode switched to LIVE' : 'Trading mode switched to PAPER',
+      `Risk baselines rebased to ${basis.toFixed(2)} USD (${m === 'live' ? 'real account' : 'paper ledger'}).`)
   },
 
   setKillSwitch: v => {

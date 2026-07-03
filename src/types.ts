@@ -161,6 +161,7 @@ export interface PerfPoint {
   equity: number
   drawdown: number // negative percent, e.g. -3.2
   dailyPnl: number
+  live?: boolean // true when equity is the REAL broker account value
 }
 
 export interface BrokerConnState {

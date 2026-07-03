@@ -38,6 +38,7 @@ export default function Dashboard() {
   const priceOf = (sym: string) => assets.find(a => a.symbol === sym)?.price ?? 0
   const chart = perf.slice(-240).map(p => ({ t: fmtTime(p.ts), equity: Math.round(p.equity) }))
   const liveCount = Object.values(assetSources).filter(s => s !== 'simulated').length
+  const visiblePositionCount = liveAcct ? brokerPortfolio!.balances.filter(b => b.usd === null || b.usd > 1).length : positions.length
 
   return (
     <div className="grid" style={{ gap: 16 }}>
@@ -118,7 +119,7 @@ export default function Dashboard() {
       {/* ---------- Metric strip ---------- */}
       <div className="stat-strip">
         {[
-          { l: 'Open positions', v: String(positions.length), tone: '' },
+          { l: liveAcct ? 'Real holdings' : 'Open positions', v: String(visiblePositionCount), tone: '' },
           { l: 'Win rate', v: closed.length ? `${winRate.toFixed(0)}%` : '—', tone: winRate >= 50 ? 'pos' : 'warn' },
           { l: 'Closed trades', v: `${wins}W / ${closed.length - wins}L`, tone: '' },
           { l: 'Drawdown', v: `${drawdown.toFixed(2)}%`, tone: drawdown < -3 ? 'neg' : '' },
@@ -134,28 +135,45 @@ export default function Dashboard() {
       {/* ---------- Tables ---------- */}
       <div className="grid g2">
         <div className="card">
-          <h3>Open positions</h3>
+          <h3>{liveAcct ? 'Real broker holdings' : 'Open positions'}</h3>
           <div className="tbl-wrap">
-            <table className="tbl">
-              <thead><tr><th>Asset</th><th>Dir</th><th>Qty</th><th>Entry</th><th>Now</th><th>Unrealized</th></tr></thead>
-              <tbody>
-                {positions.length === 0 && <tr><td colSpan={6} className="muted">No open positions. {autoTrading ? 'Scanning for qualified setups.' : 'Enable the AI to start.'}</td></tr>}
-                {positions.map(p => {
-                  const px = priceOf(p.symbol)
-                  const pnl = positionPnl(p, px)
-                  return (
-                    <tr key={p.tradeId}>
-                      <td><strong>{p.symbol}</strong><div className="small">{p.strategy}</div></td>
-                      <td><Badge tone={p.direction === 'Long' ? 'green' : 'red'}>{p.direction}</Badge></td>
-                      <td className="mono">{p.qty}</td>
-                      <td className="mono">{p.entryPrice.toFixed(2)}</td>
-                      <td className="mono">{px.toFixed(2)}</td>
-                      <td className={`mono ${pnl >= 0 ? 'pos' : 'neg'}`}>{fmtUsd(pnl)}</td>
+            {liveAcct ? (
+              <table className="tbl">
+                <thead><tr><th>Asset</th><th>Qty</th><th>USD value</th><th>Source</th></tr></thead>
+                <tbody>
+                  {brokerPortfolio!.balances.length === 0 && <tr><td colSpan={4} className="muted">No synced broker balances yet.</td></tr>}
+                  {brokerPortfolio!.balances.map(b => (
+                    <tr key={b.asset}>
+                      <td><strong>{b.asset}</strong></td>
+                      <td className="mono">{b.qty < 1 ? b.qty.toFixed(8) : b.qty.toFixed(4)}</td>
+                      <td className="mono">{b.usd !== null ? fmtUsd(b.usd, 0) : 'Needs price feed'}</td>
+                      <td><Badge tone="green">{brokerPortfolio!.broker.toUpperCase()}</Badge></td>
                     </tr>
-                  )
-                })}
-              </tbody>
-            </table>
+                  ))}
+                </tbody>
+              </table>
+            ) : (
+              <table className="tbl">
+                <thead><tr><th>Asset</th><th>Dir</th><th>Qty</th><th>Entry</th><th>Now</th><th>Unrealized</th></tr></thead>
+                <tbody>
+                  {positions.length === 0 && <tr><td colSpan={6} className="muted">No open positions. {autoTrading ? 'Scanning for qualified setups.' : 'Enable the AI to start.'}</td></tr>}
+                  {positions.map(p => {
+                    const px = priceOf(p.symbol)
+                    const pnl = positionPnl(p, px)
+                    return (
+                      <tr key={p.tradeId}>
+                        <td><strong>{p.symbol}</strong><div className="small">{p.strategy}</div></td>
+                        <td><Badge tone={p.direction === 'Long' ? 'green' : 'red'}>{p.direction}</Badge></td>
+                        <td className="mono">{p.qty}</td>
+                        <td className="mono">{p.entryPrice.toFixed(2)}</td>
+                        <td className="mono">{px.toFixed(2)}</td>
+                        <td className={`mono ${pnl >= 0 ? 'pos' : 'neg'}`}>{fmtUsd(pnl)}</td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            )}
           </div>
         </div>
 

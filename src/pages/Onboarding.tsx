@@ -100,6 +100,13 @@ export default function Onboarding() {
               Interactive Brokers
               <small>Primary live integration target (mature trading APIs). Connects read-only in this build; live routing requires credentials, compliance review, and approval.</small>
             </button>
+            <button className={`choice ${broker === 'binance' ? 'selected' : ''}`} onClick={() => {
+              setBroker('binance')
+              setMarkets(cur => cur.includes('Crypto') ? cur : [...cur, 'Crypto'])
+            }}>
+              Binance Spot
+              <small>Real Binance API connection for funded spot accounts. Long-only crypto trading with signed market orders after live unlock.</small>
+            </button>
             <button className={`choice ${broker === 'etoro' ? 'selected' : ''}`} onClick={() => setBroker('etoro')}>
               eToro
               <small>Secondary integration — depends on approved eToro partner API access.</small>

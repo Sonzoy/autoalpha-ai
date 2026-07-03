@@ -56,7 +56,7 @@ export default function Admin() {
             </table>
           </div>
           <div className="row wrap mt">
-            {(['paper', 'ibkr', 'etoro'] as const).map(id => (
+            {(['paper', 'ibkr', 'binance', 'etoro'] as const).map(id => (
               <span key={id} className="row" style={{ gap: 5 }}>
                 <span className="small">{id.toUpperCase()}</span>
                 <Badge tone={statusTone(brokerConn[id].status)}>{brokerConn[id].status}</Badge>

@@ -167,7 +167,7 @@ export default function Landing({ onLaunch }: { onLaunch: () => void }) {
         <div className="l-grid4">
           {[
             { icon: <Wallet size={22} />, t: '1 · Create your account', d: 'Pick a risk profile — Conservative, Balanced, or Aggressive — and the markets to cover: crypto, stocks, ETFs, forex, commodities.' },
-            { icon: <Landmark size={22} />, t: '2 · Connect your broker', d: 'Interactive Brokers via your own gateway, or eToro with your API key. Credentials stay on your device — we never see them.' },
+            { icon: <Landmark size={22} />, t: '2 · Connect your broker', d: 'Binance spot with your API key, or IBKR via your own gateway. Credentials stay on your device or server — we never custody funds.' },
             { icon: <Bot size={22} />, t: '3 · Enable the AI engine', d: 'Realtime prices in, regime detection, strategy scoring, risk-sized positions out. All within limits you set.' },
             { icon: <ChartCandlestick size={22} />, t: '4 · Watch every decision', d: 'Full reasoning and every risk check on every trade. Pause, adjust, or emergency-stop anytime.' }
           ].map(x => (
@@ -257,7 +257,7 @@ export default function Landing({ onLaunch }: { onLaunch: () => void }) {
         <h2>Frequently asked questions</h2>
         <div className="l-faq">
           {[
-            ['Do I deposit money into AutoAlpha AI?', 'Never. AutoAlpha is non-custodial: your money stays in your own broker account (e.g., Interactive Brokers or eToro). The platform reads account data and sends authorized order instructions through official broker APIs — it cannot move funds.'],
+            ['Do I deposit money into AutoAlpha AI?', 'Never. AutoAlpha is non-custodial: your money stays in your own broker account, such as Binance or Interactive Brokers. The platform reads account data and sends authorized order instructions through official broker APIs — it cannot move funds.'],
             ['Is profit guaranteed?', 'No — and you should walk away from anyone who says otherwise. The engine optimizes for risk-adjusted returns with strict capital protection, but losses are possible and individual trades will lose. Past performance does not guarantee future results.'],
             ['How real is the market data?', 'Crypto streams tick-by-tick from Binance\'s public feed (sub-second). FX uses ECB reference rates. Stocks/ETFs go live with your free Finnhub key, and you can plug any platform\'s API in as a custom feed. By default the engine refuses to trade anything without a live feed.'],
             ['What is paper trading?', 'A $100,000 simulated account running the full engine on the same realtime data. It\'s the default for every user and the right place to evaluate the system before real money is involved.'],

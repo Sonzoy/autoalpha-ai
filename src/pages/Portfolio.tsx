@@ -13,20 +13,30 @@ export default function Portfolio() {
   const trades = useStore(s => s.trades)
   const perf = useStore(s => s.perf)
   const audit = useStore(s => s.audit)
+  const tradingMode = useStore(s => s.tradingMode)
+  const brokerPortfolio = useStore(s => s.brokerPortfolio)
 
   const priceOf = (sym: string) => assets.find(a => a.symbol === sym)?.price ?? 0
   const equity = computeEquity({ cash, positions, assets })
+  const liveAcct = tradingMode === 'live' && brokerPortfolio && brokerPortfolio.totalUsd > 0
+  const displayedEquity = liveAcct ? brokerPortfolio!.totalUsd : equity
   const closed = trades.filter(t => t.status === 'Closed')
   const realized = closed.reduce((a, t) => a + t.pnl, 0)
   const unrealized = positions.reduce((a, p) => a + positionPnl(p, priceOf(p.symbol)), 0)
 
-  const byAsset = positions.map(p => ({ name: p.symbol, value: Math.round(positionValue(p, priceOf(p.symbol))) }))
-  byAsset.push({ name: 'Cash', value: Math.round(cash) })
+  const byAsset = liveAcct
+    ? brokerPortfolio!.balances
+      .filter(b => b.usd !== null && b.usd > 0)
+      .map(b => ({ name: b.asset, value: Math.round(b.usd!) }))
+    : positions.map(p => ({ name: p.symbol, value: Math.round(positionValue(p, priceOf(p.symbol))) }))
+  if (!liveAcct) byAsset.push({ name: 'Cash', value: Math.round(cash) })
 
   const byMarket: Record<string, number> = {}
   for (const p of positions) byMarket[p.market] = (byMarket[p.market] ?? 0) + positionValue(p, priceOf(p.symbol))
-  const marketData = (Object.keys(byMarket) as Market[]).map(m => ({ name: m, value: Math.round(byMarket[m]) }))
-  if (cash > 0) marketData.push({ name: 'Cash' as any, value: Math.round(cash) })
+  const marketData = liveAcct
+    ? byAsset.map(d => ({ name: d.name as any, value: d.value }))
+    : (Object.keys(byMarket) as Market[]).map(m => ({ name: m, value: Math.round(byMarket[m]) }))
+  if (!liveAcct && cash > 0) marketData.push({ name: 'Cash' as any, value: Math.round(cash) })
 
   const chart = perf.slice(-240).map(p => ({ t: fmtTime(p.ts), equity: Math.round(p.equity), dd: p.drawdown }))
   const syncs = audit.filter(e => e.category === 'BROKER').slice(0, 10)
@@ -36,15 +46,15 @@ export default function Portfolio() {
   return (
     <div className="grid" style={{ gap: 14 }}>
       <div className="grid g4">
-        <div className="card"><div className="stat-label">Total equity</div><div className="stat-value">{fmtUsd(equity, 0)}</div></div>
-        <div className="card"><div className="stat-label">Realized P&L</div><div className={`stat-value ${realized >= 0 ? 'pos' : 'neg'}`}>{fmtUsd(realized)}</div></div>
-        <div className="card"><div className="stat-label">Unrealized P&L</div><div className={`stat-value ${unrealized >= 0 ? 'pos' : 'neg'}`}>{fmtUsd(unrealized)}</div></div>
-        <div className="card"><div className="stat-label">Cash balance</div><div className="stat-value">{fmtUsd(cash, 0)}</div></div>
+        <div className="card"><div className="stat-label">{liveAcct ? `${brokerPortfolio!.broker.toUpperCase()} account value` : 'Total equity'}</div><div className="stat-value">{fmtUsd(displayedEquity, 0)}</div></div>
+        <div className="card"><div className="stat-label">{liveAcct ? 'Synced holdings' : 'Realized P&L'}</div><div className={`stat-value ${!liveAcct && realized < 0 ? 'neg' : 'pos'}`}>{liveAcct ? brokerPortfolio!.balances.length : fmtUsd(realized)}</div></div>
+        <div className="card"><div className="stat-label">{liveAcct ? 'Broker source' : 'Unrealized P&L'}</div><div className={`stat-value ${!liveAcct && unrealized < 0 ? 'neg' : 'pos'}`}>{liveAcct ? brokerPortfolio!.broker.toUpperCase() : fmtUsd(unrealized)}</div></div>
+        <div className="card"><div className="stat-label">{liveAcct ? 'Mirror cash' : 'Cash balance'}</div><div className="stat-value">{fmtUsd(cash, 0)}</div></div>
       </div>
 
       <div className="grid g2">
         <div className="card">
-          <h3>Allocation by asset</h3>
+          <h3>{liveAcct ? 'Broker allocation by asset' : 'Allocation by asset'}</h3>
           <div style={{ height: 210 }}>
             <ResponsiveContainer>
               <PieChart>
@@ -62,7 +72,7 @@ export default function Portfolio() {
           </div>
         </div>
         <div className="card">
-          <h3>Allocation by market</h3>
+          <h3>{liveAcct ? 'Broker balances' : 'Allocation by market'}</h3>
           <div style={{ height: 210 }}>
             <ResponsiveContainer>
               <PieChart>
@@ -116,27 +126,44 @@ export default function Portfolio() {
 
       <div className="grid g2">
         <div className="card">
-          <h3>Open positions</h3>
+          <h3>{liveAcct ? 'Real broker holdings' : 'Open positions'}</h3>
           <div className="tbl-wrap">
-            <table className="tbl">
-              <thead><tr><th>Asset</th><th>Dir</th><th>Qty</th><th>Entry</th><th>Value</th><th>Unrealized</th></tr></thead>
-              <tbody>
-                {positions.length === 0 && <tr><td colSpan={6} className="muted">No open positions.</td></tr>}
-                {positions.map(p => {
-                  const px = priceOf(p.symbol); const pnl = positionPnl(p, px)
-                  return (
-                    <tr key={p.tradeId}>
-                      <td><strong>{p.symbol}</strong></td>
-                      <td><Badge tone={p.direction === 'Long' ? 'green' : 'red'}>{p.direction}</Badge></td>
-                      <td className="mono">{p.qty}</td>
-                      <td className="mono">{p.entryPrice.toFixed(2)}</td>
-                      <td className="mono">{fmtUsd(positionValue(p, px), 0)}</td>
-                      <td className={`mono ${pnl >= 0 ? 'pos' : 'neg'}`}>{fmtUsd(pnl)}</td>
+            {liveAcct ? (
+              <table className="tbl">
+                <thead><tr><th>Asset</th><th>Qty</th><th>USD value</th><th>Authoritative source</th></tr></thead>
+                <tbody>
+                  {brokerPortfolio!.balances.length === 0 && <tr><td colSpan={4} className="muted">No synced broker balances yet.</td></tr>}
+                  {brokerPortfolio!.balances.map(b => (
+                    <tr key={b.asset}>
+                      <td><strong>{b.asset}</strong></td>
+                      <td className="mono">{b.qty < 1 ? b.qty.toFixed(8) : b.qty.toFixed(4)}</td>
+                      <td className="mono">{b.usd !== null ? fmtUsd(b.usd, 0) : 'Needs price feed'}</td>
+                      <td><Badge tone="green">{brokerPortfolio!.broker.toUpperCase()}</Badge></td>
                     </tr>
-                  )
-                })}
-              </tbody>
-            </table>
+                  ))}
+                </tbody>
+              </table>
+            ) : (
+              <table className="tbl">
+                <thead><tr><th>Asset</th><th>Dir</th><th>Qty</th><th>Entry</th><th>Value</th><th>Unrealized</th></tr></thead>
+                <tbody>
+                  {positions.length === 0 && <tr><td colSpan={6} className="muted">No open positions.</td></tr>}
+                  {positions.map(p => {
+                    const px = priceOf(p.symbol); const pnl = positionPnl(p, px)
+                    return (
+                      <tr key={p.tradeId}>
+                        <td><strong>{p.symbol}</strong></td>
+                        <td><Badge tone={p.direction === 'Long' ? 'green' : 'red'}>{p.direction}</Badge></td>
+                        <td className="mono">{p.qty}</td>
+                        <td className="mono">{p.entryPrice.toFixed(2)}</td>
+                        <td className="mono">{fmtUsd(positionValue(p, px), 0)}</td>
+                        <td className={`mono ${pnl >= 0 ? 'pos' : 'neg'}`}>{fmtUsd(pnl)}</td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            )}
           </div>
         </div>
         <div className="card">

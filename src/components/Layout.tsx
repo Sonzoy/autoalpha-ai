@@ -36,6 +36,7 @@ export default function Layout() {
   const adminApprovedLive = useStore(s => s.adminApprovedLive)
   const setTradingMode = useStore(s => s.setTradingMode)
   const [liveBlocked, setLiveBlocked] = useState(false)
+  const profile = useStore(s => s.profile)
 
   const switchMode = (m: 'paper' | 'live') => {
     if (m === 'live' && !(liveUnlocked && adminApprovedLive)) { setLiveBlocked(true); return }
@@ -44,6 +45,9 @@ export default function Layout() {
 
   const regimeTone = regime === 'Trending' ? 'green' : regime === 'Risk-Off' ? 'red' : regime === 'Volatile' ? 'amber' : 'blue'
   const paperOk = brokerConn.paper.status === 'connected'
+  const selectedLiveBroker = profile.broker === 'binance' || profile.broker === 'ibkr' ? profile.broker : null
+  const liveBrokerOk = selectedLiveBroker ? brokerConn[selectedLiveBroker].status === 'connected' : brokerConn.binance.status === 'connected' || brokerConn.ibkr.status === 'connected'
+  const brokerOk = tradingMode === 'live' ? liveBrokerOk : paperOk
 
   const item = (to: string, icon: React.ReactNode, label: string) => (
     <NavLink to={to} className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>{icon}<span>{label}</span></NavLink>
@@ -81,7 +85,7 @@ export default function Layout() {
           </div>
           {/* Quiet by default — status badges appear only when something needs attention */}
           {remote.active && !serverOk && <Badge tone="red">SERVER UNREACHABLE</Badge>}
-          {!paperOk && <Badge tone="red">Broker offline</Badge>}
+          {!brokerOk && <Badge tone="red">{tradingMode === 'live' ? 'Live broker offline' : 'Paper broker offline'}</Badge>}
           {killSwitch && <Badge tone="red">KILL SWITCH</Badge>}
           {autoPaused && <Badge tone="amber">RISK PAUSED</Badge>}
           {emergencyStop && <Badge tone="red">EMERGENCY STOP</Badge>}

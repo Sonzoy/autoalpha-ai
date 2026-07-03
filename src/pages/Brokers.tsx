@@ -17,6 +17,7 @@ export default function Brokers() {
   const liveRequested = useStore(s => s.liveRequested)
   const liveUnlocked = useStore(s => s.liveUnlocked)
   const adminApprovedLive = useStore(s => s.adminApprovedLive)
+  const executableBrokerConnected = brokerConn.ibkr?.status === 'connected' || brokerConn.binance?.status === 'connected'
   const requestLive = useStore(s => s.requestLive)
   const setLiveUnlocked = useStore(s => s.setLiveUnlocked)
   const profile = useStore(s => s.profile)
@@ -175,9 +176,8 @@ export default function Brokers() {
         <h3><ShieldCheck size={13} style={{ verticalAlign: -2 }} /> Non-custodial by design — credential security</h3>
         <p className="muted">AutoAlpha AI never accepts deposits and never holds your money. Broker credentials are handled to the
           same standard: your IBKR login stays inside IBKR's own gateway (this app only talks to the gateway you run);
-          your eToro API key is stored only in this browser and transmitted only to eToro over HTTPS. Nothing is sent to
-          any AutoAlpha server — there is none. For a production deployment, keys belong in a server-side vault; treat
-          this client-side build as suitable for read-only and paper use.</p>
+          your Binance key signs official REST API requests; your eToro API key is transmitted only to eToro over HTTPS.
+          Use the 24/7 server for real Binance trading so API secrets stay out of a browser page and broker calls run server-side.</p>
       </div>
 
       {card('paper')}
@@ -216,7 +216,7 @@ export default function Brokers() {
         <p className="muted mb">{LIVE_LOCK_MESSAGE}</p>
         <div className="grid g2" style={{ gap: 8 }}>
           {[
-            { label: 'Real broker connected (IBKR, Binance, or eToro)', ok: brokerConn.ibkr?.status === 'connected' || brokerConn.binance?.status === 'connected' || brokerConn.etoro?.status === 'connected' },
+            { label: 'Live-order broker connected (Binance or IBKR)', ok: executableBrokerConnected },
             { label: 'User authorization requested', ok: liveRequested },
             { label: 'Risk acknowledgement on file', ok: profile.riskAcknowledged },
             { label: 'Compliance review & admin approval', ok: adminApprovedLive }
@@ -231,7 +231,7 @@ export default function Brokers() {
           {!liveRequested && <button className="btn sm" onClick={requestLive}>Request live trading unlock</button>}
           {liveRequested && !adminApprovedLive && <Badge tone="amber">Pending admin approval (Admin Console)</Badge>}
           {liveRequested && adminApprovedLive && !liveUnlocked &&
-            <button className="btn success sm" disabled={brokerConn.ibkr?.status !== 'connected' && brokerConn.binance?.status !== 'connected' && brokerConn.etoro?.status !== 'connected'}
+            <button className="btn success sm" disabled={!executableBrokerConnected}
               onClick={() => setConfirmLive(true)}>Enable live trading</button>}
           {liveUnlocked && <button className="btn danger sm" onClick={() => { setLiveUnlocked(false); setFirstLiveOrderAuthorized(false) }}>Re-lock live trading</button>}
         </div>
@@ -239,13 +239,12 @@ export default function Brokers() {
           <label className="checkline mt">
             <input type="checkbox" checked={firstLiveOrderAuthorized} onChange={e => setFirstLiveOrderAuthorized(e.target.checked)} />
             <span><strong>First live order pre-authorization.</strong> I authorize the engine to transmit real orders to my
-              connected IBKR account within my risk limits. Without this, live-mode orders are held and logged instead of sent.
+              connected Binance or IBKR account within my risk limits. Without this, live-mode orders are held and logged instead of sent.
               Real money is at risk; start with minimal size and consider IBKR's paper account (same API) first.</span>
           </label>
         )}
-        <p className="small mt">Order routing goes to your own IBKR gateway (market order + confirmation acknowledgement).
-          The order code follows IBKR's documented Client Portal API but has not been exercised against a real gateway in
-          this build — validate with an IBKR paper account before funding. The in-app ledger mirrors fills; your broker's
+        <p className="small mt">Binance order routing uses signed official spot API requests and submits real market orders
+          to your funded account. IBKR routing goes to your own gateway. The in-app ledger mirrors fills; your broker's
           records are authoritative.</p>
       </div>
 
