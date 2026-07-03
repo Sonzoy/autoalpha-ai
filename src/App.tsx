@@ -20,6 +20,12 @@ export default function App() {
   const currentUser = useStore(s => s.currentUser)
   const onboarded = useStore(s => s.profile.onboarded)
   const speed = useStore(s => s.speed)
+  const theme = useStore(s => s.theme)
+
+  // Apply theme to the document root
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme ?? 'dark'
+  }, [theme])
 
   // Hydrate broker adapters with this user's saved API configuration and
   // reset connections when the account changes (per-user isolation)
@@ -43,11 +49,24 @@ export default function App() {
     }
   }, [currentUser, onboarded])
 
-  // Engine heartbeat
+  // Engine heartbeat — runs in a Web Worker so browsers don't throttle it
+  // when the tab is in the background. The engine keeps trading as long as
+  // this tab stays open (browser or laptop closed = engine stopped; true
+  // 24/7 unattended operation requires a server-side deployment).
   useEffect(() => {
     if (!currentUser || !onboarded) return
-    const id = setInterval(() => { void engineTick() }, SPEED_MS[speed] ?? 2500)
-    return () => clearInterval(id)
+    const workerCode = 'let id=null;onmessage=e=>{if(id)clearInterval(id);id=setInterval(()=>postMessage(1),e.data)}'
+    let worker: Worker | null = null
+    try {
+      worker = new Worker(URL.createObjectURL(new Blob([workerCode], { type: 'text/javascript' })))
+      worker.onmessage = () => { void engineTick() }
+      worker.postMessage(SPEED_MS[speed] ?? 2500)
+    } catch {
+      // Worker unavailable (rare) — fall back to a normal interval
+      const id = setInterval(() => { void engineTick() }, SPEED_MS[speed] ?? 2500)
+      return () => clearInterval(id)
+    }
+    return () => worker?.terminate()
   }, [currentUser, onboarded, speed])
 
   if (!currentUser) return <Auth />

@@ -1,4 +1,4 @@
-import type { PriceSource } from '../types'
+import type { CustomFeed, PriceSource } from '../types'
 import { AuditLogger } from './AuditLogger'
 
 /**
@@ -34,9 +34,52 @@ async function getJson(url: string): Promise<any | null> {
   } catch { return null }
 }
 
+function jsonPath(obj: any, path: string): any {
+  return path.split('.').reduce((o, k) => (o == null ? undefined : o[k]), obj)
+}
+
+const seededHistory = new Set<string>()
+
 export const MarketDataService = {
-  async fetchQuotes(finnhubKey: string): Promise<Record<string, LiveQuote>> {
+  /**
+   * Seed real price history for live crypto assets (CoinGecko hourly, ~2 days)
+   * so momentum/volatility scores are computed from real data, not simulated
+   * warmup. Runs once per symbol per session.
+   */
+  async seedCryptoHistory(): Promise<Record<string, number[]>> {
+    const out: Record<string, number[]> = {}
+    await Promise.all(Object.entries(COINGECKO_IDS).map(async ([sym, id]) => {
+      if (seededHistory.has(sym)) return
+      const j = await getJson(`https://api.coingecko.com/api/v3/coins/${id}/market_chart?vs_currency=usd&days=2`)
+      const prices: number[] | undefined = j?.prices?.map((p: [number, number]) => p[1])
+      if (prices && prices.length > 20) {
+        out[sym] = prices.slice(-160)
+        seededHistory.add(sym)
+      }
+    }))
+    if (Object.keys(out).length) {
+      AuditLogger.info('MARKET', `Real price history seeded for ${Object.keys(out).join(', ')}`,
+        'Momentum and volatility scores for these assets are computed from actual market history (CoinGecko, ~48h hourly).')
+    }
+    return out
+  },
+
+  async fetchQuotes(finnhubKey: string, customFeeds: CustomFeed[] = []): Promise<Record<string, LiveQuote>> {
     const out: Record<string, LiveQuote> = {}
+
+    // Custom feeds (user-configured providers) — applied first so specific
+    // integrations can be overridden by nothing; built-ins fill the rest.
+    await Promise.all(customFeeds.map(async f => {
+      try {
+        const headers: Record<string, string> = {}
+        if (f.headerName && f.headerValue) headers[f.headerName] = f.headerValue
+        const r = await fetch(f.url, { headers, signal: AbortSignal.timeout(8000) })
+        if (!r.ok) return
+        const j = await r.json()
+        const p = Number(jsonPath(j, f.jsonPath))
+        if (Number.isFinite(p) && p > 0) out[f.symbol] = { price: p, source: 'custom' }
+      } catch { /* feed down — fall through to built-ins/simulation */ }
+    }))
 
     // Crypto — CoinGecko
     const ids = Object.values(COINGECKO_IDS).join(',')
@@ -44,7 +87,7 @@ export const MarketDataService = {
     if (cg) {
       for (const [sym, id] of Object.entries(COINGECKO_IDS)) {
         const p = cg[id]?.usd
-        if (typeof p === 'number' && p > 0) out[sym] = { price: p, source: 'coingecko' }
+        if (typeof p === 'number' && p > 0 && !out[sym]) out[sym] = { price: p, source: 'coingecko' }
       }
     }
 
@@ -59,12 +102,13 @@ export const MarketDataService = {
       if (eur || jpy) fxFetchedAt = Date.now()
     }
     for (const sym of ['EUR/USD', 'USD/JPY']) {
-      if (fxCache[sym]) out[sym] = { price: fxCache[sym], source: 'frankfurter' }
+      if (fxCache[sym] && !out[sym]) out[sym] = { price: fxCache[sym], source: 'frankfurter' }
     }
 
     // Stocks / ETFs — Finnhub, only with a user-supplied key
     if (finnhubKey) {
       await Promise.all(FINNHUB_SYMBOLS.map(async sym => {
+        if (out[sym]) return
         const q = await getJson(`https://finnhub.io/api/v1/quote?symbol=${sym}&token=${encodeURIComponent(finnhubKey)}`)
         if (q && typeof q.c === 'number' && q.c > 0) out[sym] = { price: q.c, source: 'finnhub' }
       }))

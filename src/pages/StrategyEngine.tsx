@@ -36,6 +36,29 @@ export default function StrategyEngine() {
         <p className="small mt">Strategies are selected automatically per asset based on detected regime and asset class — trend and volatility route to momentum or reversion, sentiment weighs heaviest in crypto, and elevated macro risk shifts the engine defensive. Simplified logic is shown for transparency; exact signal parameters are proprietary.</p>
       </div>
 
+      <div className="card">
+        <h3>How the AI selects a strategy — the exact decision path</h3>
+        <p className="muted">Every cycle, each monitored asset goes through the same deterministic pipeline:</p>
+        <p className="muted" style={{ marginTop: 8 }}>
+          <strong>1. Regime detection.</strong> Volatility above 66 → Volatile; macro risk above 74 or panic sentiment → Risk-Off;
+          absolute trend above 45 → Trending; otherwise Ranging.{' '}
+          <strong>2. Eligibility guards.</strong> Assets are skipped when history is too thin (&lt;40 bars), liquidity is below 35,
+          sentiment and trend strongly conflict, or the asset is already held. With live-data-only on, simulated-price assets are excluded entirely.{' '}
+          <strong>3. Regime routing.</strong> Trending → Trend Momentum + Sentiment; Ranging → Mean Reversion + Sentiment;
+          Volatile → Defensive + Mean Reversion; Risk-Off → Defensive only. Crypto always also consults Sentiment.{' '}
+          <strong>4. Scoring.</strong> Each candidate strategy scores the asset 0–100 from its own inputs (momentum strength,
+          deviation from mean, sentiment alignment, macro risk). The single best signal across all assets wins — if it clears
+          a conviction threshold of 50; otherwise the engine holds Cash / Risk-Off.{' '}
+          <strong>5. Sizing.</strong> Allocation starts from your risk profile, is scaled down by elevated volatility and macro
+          risk, and is capped by your per-trade limit. Stop-loss and take-profit attach per your settings.{' '}
+          <strong>6. Risk engine.</strong> The resulting proposal still has to pass all pre-trade risk checks before any order exists.
+        </p>
+        <p className="small mt"><strong>Honest limits:</strong> these are rules-based heuristics implementing four classic approaches
+          — not a guarantee of profit, and not yet validated by historical backtesting. Individual trades will lose money by design
+          (stops exist for that reason). Before trading real funds, run extended paper sessions and backtest against historical data.
+          Past performance does not guarantee future results.</p>
+      </div>
+
       <div className="grid g3">
         {STRATEGIES.map(s => (
           <div key={s.name} className="card" style={s.name === engineMode ? { borderColor: 'var(--blue)' } : undefined}>

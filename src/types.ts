@@ -169,7 +169,20 @@ export interface BrokerConnState {
   healthy: boolean
 }
 
-export type PriceSource = 'coingecko' | 'frankfurter' | 'finnhub' | 'broker' | 'simulated'
+export type PriceSource = 'coingecko' | 'frankfurter' | 'finnhub' | 'broker' | 'custom' | 'simulated'
+
+export type ThemeMode = 'dark' | 'light'
+
+/** User-defined live price feed for any platform/provider. */
+export interface CustomFeed {
+  id: string
+  name: string       // e.g. "Binance BTC"
+  symbol: string     // which asset this feeds, e.g. "BTC/USD"
+  url: string        // endpoint returning JSON with the price
+  jsonPath: string   // dot-path to the price in the response, e.g. "price" or "data.last"
+  headerName?: string  // optional auth header (keys never go in URLs)
+  headerValue?: string
+}
 
 export interface IbkrConfig {
   gatewayUrl: string // e.g. https://localhost:5000/v1/api (IBKR Client Portal Gateway)

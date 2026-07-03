@@ -9,6 +9,7 @@ const SOURCE_LABEL: Record<PriceSource, { label: string; tone: 'green' | 'blue' 
   frankfurter: { label: 'LIVE · ECB', tone: 'green' },
   finnhub: { label: 'LIVE · Finnhub', tone: 'green' },
   broker: { label: 'LIVE · Broker', tone: 'blue' },
+  custom: { label: 'LIVE · Custom feed', tone: 'green' },
   simulated: { label: 'SIMULATED', tone: 'gray' }
 }
 
@@ -29,6 +30,13 @@ export default function MarketIntel() {
   const setMarketKey = useStore(s => s.setMarketKey)
   const [finnhubDraft, setFinnhubDraft] = useState(marketKeys.finnhub)
   const liveCount = Object.values(assetSources).filter(s => s !== 'simulated').length
+  const customFeeds = useStore(s => s.customFeeds)
+  const addCustomFeed = useStore(s => s.addCustomFeed)
+  const removeCustomFeed = useStore(s => s.removeCustomFeed)
+  const liveDataOnly = useStore(s => s.liveDataOnly)
+  const setLiveDataOnly = useStore(s => s.setLiveDataOnly)
+  const [showFeedForm, setShowFeedForm] = useState(false)
+  const [feed, setFeed] = useState({ name: '', symbol: '', url: '', jsonPath: '', headerName: '', headerValue: '' })
 
   const snaps = assets.map(a => intel[a.symbol]).filter(Boolean)
   const avg = (f: (x: any) => number) => snaps.length ? snaps.reduce((a, x) => a + f(x), 0) / snaps.length : 0
@@ -134,6 +142,61 @@ export default function MarketIntel() {
             <input type="password" value={finnhubDraft} onChange={e => setFinnhubDraft(e.target.value)} placeholder="paste your Finnhub key" autoComplete="off" /></div>
           <button className="btn sm" onClick={() => setMarketKey('finnhub', finnhubDraft.trim())}>{marketKeys.finnhub ? 'Update key' : 'Save key'}</button>
           {marketKeys.finnhub && <button className="btn ghost sm" style={{ marginLeft: 8 }} onClick={() => { setFinnhubDraft(''); setMarketKey('finnhub', '') }}>Remove key</button>}
+        </div>
+
+        <div className="mt" style={{ borderTop: '1px solid var(--border)', paddingTop: 12 }}>
+          <div className="row spread wrap">
+            <div>
+              <strong style={{ fontSize: 13 }}>Live-data-only trading</strong>
+              <div className="small">When on (recommended), the engine never opens trades on simulated prices — assets without a live feed are excluded.</div>
+            </div>
+            <button className={`toggle ${liveDataOnly ? 'on' : ''}`} onClick={() => setLiveDataOnly(!liveDataOnly)}><span className="knob" /></button>
+          </div>
+        </div>
+
+        <div className="mt" style={{ borderTop: '1px solid var(--border)', paddingTop: 12 }}>
+          <div className="row spread wrap mb">
+            <strong style={{ fontSize: 13 }}>Custom price feeds — connect any platform's API</strong>
+            {!showFeedForm && <button className="btn ghost sm" onClick={() => setShowFeedForm(true)}>Add feed</button>}
+          </div>
+          {customFeeds.length > 0 && (
+            <div className="tbl-wrap mb">
+              <table className="tbl">
+                <thead><tr><th>Name</th><th>Feeds asset</th><th>Endpoint</th><th></th></tr></thead>
+                <tbody>
+                  {customFeeds.map(f => (
+                    <tr key={f.id}>
+                      <td>{f.name}</td><td className="mono">{f.symbol}</td>
+                      <td className="small">{f.url.length > 40 ? f.url.slice(0, 40) + '…' : f.url}{f.headerName ? ' · auth header set' : ''}</td>
+                      <td><button className="btn ghost sm" onClick={() => removeCustomFeed(f.id)}>Remove</button></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {showFeedForm && (
+            <div style={{ padding: 12, background: 'var(--bg-3)', borderRadius: 8, maxWidth: 560 }}>
+              <p className="small mb">Any JSON endpoint works. Example — Binance BTC: URL <span className="mono">https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT</span>, price path <span className="mono">price</span>. API keys go in the auth header (stored only in this browser), never in the URL.</p>
+              <div className="grid g2" style={{ gap: 8 }}>
+                <div className="field"><label>Feed name</label><input value={feed.name} onChange={e => setFeed({ ...feed, name: e.target.value })} placeholder="Binance BTC" /></div>
+                <div className="field"><label>Feeds asset (symbol)</label>
+                  <select value={feed.symbol} onChange={e => setFeed({ ...feed, symbol: e.target.value })}>
+                    <option value="">Select asset…</option>
+                    {assets.map(a => <option key={a.symbol} value={a.symbol}>{a.symbol}</option>)}
+                  </select></div>
+              </div>
+              <div className="field"><label>Endpoint URL (HTTPS, must allow browser/CORS access)</label><input value={feed.url} onChange={e => setFeed({ ...feed, url: e.target.value })} placeholder="https://api.example.com/price?symbol=BTC" /></div>
+              <div className="grid g3" style={{ gap: 8 }}>
+                <div className="field"><label>Price JSON path</label><input value={feed.jsonPath} onChange={e => setFeed({ ...feed, jsonPath: e.target.value })} placeholder="data.last" /></div>
+                <div className="field"><label>Auth header (optional)</label><input value={feed.headerName} onChange={e => setFeed({ ...feed, headerName: e.target.value })} placeholder="X-API-Key" /></div>
+                <div className="field"><label>Header value</label><input type="password" value={feed.headerValue} onChange={e => setFeed({ ...feed, headerValue: e.target.value })} autoComplete="off" /></div>
+              </div>
+              <button className="btn sm primary" disabled={!feed.name || !feed.symbol || !feed.url || !feed.jsonPath}
+                onClick={() => { addCustomFeed({ id: `cf-${Date.now()}`, ...feed }); setFeed({ name: '', symbol: '', url: '', jsonPath: '', headerName: '', headerValue: '' }); setShowFeedForm(false) }}>Save feed</button>
+              <button className="btn ghost sm" style={{ marginLeft: 8 }} onClick={() => setShowFeedForm(false)}>Cancel</button>
+            </div>
+          )}
         </div>
       </div>
     </div>

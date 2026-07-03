@@ -21,6 +21,12 @@ export default function Brokers() {
   const profile = useStore(s => s.profile)
   const [busy, setBusy] = useState<BrokerId | null>(null)
   const [confirmLive, setConfirmLive] = useState(false)
+  const [editIbkr, setEditIbkr] = useState(false)
+  const [editEtoro, setEditEtoro] = useState(false)
+  const firstLiveOrderAuthorized = useStore(s => s.firstLiveOrderAuthorized)
+  const setFirstLiveOrderAuthorized = useStore(s => s.setFirstLiveOrderAuthorized)
+
+  const mask = (v: string, keep = 4) => v.length <= keep ? '••••' : '••••••••' + v.slice(-keep)
 
   // IBKR config form state
   const [gatewayUrl, setGatewayUrl] = useState(brokerConfig.ibkr?.gatewayUrl ?? '')
@@ -93,29 +99,51 @@ export default function Brokers() {
     )
   }
 
+  // API configuration is hidden by default — a masked summary with an Edit
+  // button is shown instead, so credentials are never displayed on screen.
   const ibkrForm = (
     <div className="mb" style={{ padding: 12, background: 'var(--bg-3)', borderRadius: 8 }}>
-      <div className="row" style={{ marginBottom: 8 }}><KeyRound size={13} color="var(--blue)" /><strong style={{ fontSize: 12.5 }}>API setup — Client Portal Gateway</strong></div>
-      <p className="small mb">Run IBKR's Client Portal Gateway on your machine, log in to it with your IBKR credentials (they never touch this app), then save its URL here. Stored only in this browser.</p>
-      <div className="field"><label>Gateway URL</label>
-        <input value={gatewayUrl} onChange={e => setGatewayUrl(e.target.value)} placeholder="https://localhost:5000/v1/api" /></div>
-      <div className="field"><label>Account ID (optional)</label>
-        <input value={accountId} onChange={e => setAccountId(e.target.value)} placeholder="U1234567" /></div>
-      <button className="btn sm" onClick={saveIbkr}>{brokerConfig.ibkr ? 'Update configuration' : 'Save configuration'}</button>
-      {brokerConfig.ibkr && <button className="btn ghost sm" style={{ marginLeft: 8 }} onClick={() => { setGatewayUrl(''); setAccountId(''); setBrokerConfig('ibkr', null); (brokers.ibkr as IBKRBrokerAdapter).configure(null) }}>Clear</button>}
+      <div className="row spread wrap" style={{ marginBottom: editIbkr ? 8 : 0 }}>
+        <span className="row"><KeyRound size={13} color="var(--blue)" /><strong style={{ fontSize: 12.5 }}>API setup — Client Portal Gateway</strong>
+          {!editIbkr && <span className="small" style={{ marginLeft: 8 }}>
+            {brokerConfig.ibkr ? `configured (${mask(brokerConfig.ibkr.gatewayUrl, 0)}${brokerConfig.ibkr.accountId ? ` · acct ${mask(brokerConfig.ibkr.accountId)}` : ''})` : 'not configured'}
+          </span>}
+        </span>
+        {!editIbkr && <button className="btn ghost sm" onClick={() => setEditIbkr(true)}>Edit</button>}
+      </div>
+      {editIbkr && <>
+        <p className="small mb">Run IBKR's Client Portal Gateway on your machine, log in to it with your IBKR credentials (they never touch this app), then save its URL here. Stored only in this browser.</p>
+        <div className="field"><label>Gateway URL</label>
+          <input value={gatewayUrl} onChange={e => setGatewayUrl(e.target.value)} placeholder="https://localhost:5000/v1/api" /></div>
+        <div className="field"><label>Account ID (required for live orders)</label>
+          <input value={accountId} onChange={e => setAccountId(e.target.value)} placeholder="U1234567" /></div>
+        <button className="btn sm" onClick={() => { saveIbkr(); setEditIbkr(false) }}>{brokerConfig.ibkr ? 'Update' : 'Save'}</button>
+        <button className="btn ghost sm" style={{ marginLeft: 8 }} onClick={() => setEditIbkr(false)}>Cancel</button>
+        {brokerConfig.ibkr && <button className="btn ghost sm" style={{ marginLeft: 8 }} onClick={() => { setGatewayUrl(''); setAccountId(''); setBrokerConfig('ibkr', null); (brokers.ibkr as IBKRBrokerAdapter).configure(null); setEditIbkr(false) }}>Clear config</button>}
+      </>}
     </div>
   )
 
   const etoroForm = (
     <div className="mb" style={{ padding: 12, background: 'var(--bg-3)', borderRadius: 8 }}>
-      <div className="row" style={{ marginBottom: 8 }}><KeyRound size={13} color="var(--blue)" /><strong style={{ fontSize: 12.5 }}>API setup — eToro API key</strong></div>
-      <p className="small mb">eToro grants API access on approval — request a key from eToro's developer portal. The key is stored only in this browser and sent only to api.etoro.com in a request header.</p>
-      <div className="field"><label>eToro username</label>
-        <input value={etUser} onChange={e => setEtUser(e.target.value)} placeholder="your-etoro-username" /></div>
-      <div className="field"><label>API key</label>
-        <input type="password" value={etKey} onChange={e => setEtKey(e.target.value)} placeholder="••••••••••••••••" autoComplete="off" /></div>
-      <button className="btn sm" onClick={saveEtoro}>{brokerConfig.etoro ? 'Update configuration' : 'Save configuration'}</button>
-      {brokerConfig.etoro && <button className="btn ghost sm" style={{ marginLeft: 8 }} onClick={() => { setEtUser(''); setEtKey(''); setBrokerConfig('etoro', null); (brokers.etoro as EToroBrokerAdapter).configure(null) }}>Clear</button>}
+      <div className="row spread wrap" style={{ marginBottom: editEtoro ? 8 : 0 }}>
+        <span className="row"><KeyRound size={13} color="var(--blue)" /><strong style={{ fontSize: 12.5 }}>API setup — eToro API key</strong>
+          {!editEtoro && <span className="small" style={{ marginLeft: 8 }}>
+            {brokerConfig.etoro ? `configured (${brokerConfig.etoro.username} · key ${mask(brokerConfig.etoro.apiKey)})` : 'not configured'}
+          </span>}
+        </span>
+        {!editEtoro && <button className="btn ghost sm" onClick={() => setEditEtoro(true)}>Edit</button>}
+      </div>
+      {editEtoro && <>
+        <p className="small mb">eToro grants API access on approval — request a key from eToro's developer portal. The key is stored only in this browser and sent only to api.etoro.com in a request header.</p>
+        <div className="field"><label>eToro username</label>
+          <input value={etUser} onChange={e => setEtUser(e.target.value)} placeholder="your-etoro-username" /></div>
+        <div className="field"><label>API key</label>
+          <input type="password" value={etKey} onChange={e => setEtKey(e.target.value)} placeholder="••••••••••••••••" autoComplete="off" /></div>
+        <button className="btn sm" onClick={() => { saveEtoro(); setEditEtoro(false) }}>{brokerConfig.etoro ? 'Update' : 'Save'}</button>
+        <button className="btn ghost sm" style={{ marginLeft: 8 }} onClick={() => setEditEtoro(false)}>Cancel</button>
+        {brokerConfig.etoro && <button className="btn ghost sm" style={{ marginLeft: 8 }} onClick={() => { setEtUser(''); setEtKey(''); setBrokerConfig('etoro', null); (brokers.etoro as EToroBrokerAdapter).configure(null); setEditEtoro(false) }}>Clear config</button>}
+      </>}
     </div>
   )
 
@@ -159,11 +187,20 @@ export default function Brokers() {
           {liveRequested && adminApprovedLive && !liveUnlocked &&
             <button className="btn success sm" disabled={brokerConn.ibkr.status !== 'connected' && brokerConn.etoro.status !== 'connected'}
               onClick={() => setConfirmLive(true)}>Enable live trading</button>}
-          {liveUnlocked && <button className="btn danger sm" onClick={() => setLiveUnlocked(false)}>Re-lock live trading</button>}
+          {liveUnlocked && <button className="btn danger sm" onClick={() => { setLiveUnlocked(false); setFirstLiveOrderAuthorized(false) }}>Re-lock live trading</button>}
         </div>
-        <p className="small mt">Even when unlocked, this build does not transmit real orders: order routing code is
-          intentionally left unimplemented so that enabling real execution is a deliberate engineering step (see the
-          adapter source), not a toggle. A separate confirmation is required before the first live order.</p>
+        {liveUnlocked && (
+          <label className="checkline mt">
+            <input type="checkbox" checked={firstLiveOrderAuthorized} onChange={e => setFirstLiveOrderAuthorized(e.target.checked)} />
+            <span><strong>First live order pre-authorization.</strong> I authorize the engine to transmit real orders to my
+              connected IBKR account within my risk limits. Without this, live-mode orders are held and logged instead of sent.
+              Real money is at risk; start with minimal size and consider IBKR's paper account (same API) first.</span>
+          </label>
+        )}
+        <p className="small mt">Order routing goes to your own IBKR gateway (market order + confirmation acknowledgement).
+          The order code follows IBKR's documented Client Portal API but has not been exercised against a real gateway in
+          this build — validate with an IBKR paper account before funding. The in-app ledger mirrors fills; your broker's
+          records are authoritative.</p>
       </div>
 
       <Modal open={confirmLive} onClose={() => setConfirmLive(false)}>

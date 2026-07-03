@@ -59,12 +59,16 @@ async function tick(): Promise<void> {
   if (Date.now() - lastLiveFetch > 30_000) {
     lastLiveFetch = Date.now()
     const key = st.marketKeys?.finnhub ?? ''
-    void MarketDataService.fetchQuotes(key).then(quotes => {
+    const feeds = st.customFeeds ?? []
+    void MarketDataService.seedCryptoHistory().then(h => {
+      if (sim && Object.keys(h).length) sim.applyLiveHistory(h)
+    }).catch(() => {})
+    void MarketDataService.fetchQuotes(key, feeds).then(quotes => {
       const s2 = useStore.getState()
       if (!s2.currentUser || !sim) return
       sim.applyLiveQuotes(quotes)
       const sources: Record<string, PriceSource> = {}
-      for (const a of sim.assets) sources[a.symbol] = quotes[a.symbol]?.source ?? 'simulated'
+      for (const a of sim.assets) sources[a.symbol] = quotes[a.symbol]?.source ?? (sim.liveSymbols.has(a.symbol) ? 'coingecko' : 'simulated')
       s2.setAssetSources(sources)
     }).catch(() => { /* degraded to simulation */ })
   }
@@ -152,7 +156,18 @@ async function tick(): Promise<void> {
     return
   }
 
-  const selection = StrategySelector.select(assets, intel, {
+  // Live-data-only policy: never open trades on simulated prices unless the
+  // user has explicitly allowed demo assets.
+  const tradable = s.liveDataOnly
+    ? assets.filter(a => (s.assetSources[a.symbol] ?? 'simulated') !== 'simulated')
+    : assets
+  if (s.liveDataOnly && tradable.filter(a => s.profile.markets.includes(a.market)).length === 0) {
+    useStore.getState().setEngineStatus('Cash / Risk-Off',
+      'Live-data-only policy: no live-priced assets in your selected markets yet. Crypto & FX feeds are automatic; add a Finnhub key or custom feeds for stocks/ETFs (Market Intel page).', 0)
+    return
+  }
+
+  const selection = StrategySelector.select(tradable, intel, {
     markets: s.profile.markets, riskProfile: s.profile.riskProfile,
     settings: s.settings, positions: s.positions
   })
@@ -177,7 +192,8 @@ async function tick(): Promise<void> {
 
   const trade: Trade = {
     id: `tr-${Date.now()}-${Math.floor(Math.random() * 1e4)}`,
-    symbol: prop.symbol, market: prop.market, broker: 'paper',
+    symbol: prop.symbol, market: prop.market,
+    broker: s.tradingMode === 'live' ? 'ibkr' : 'paper',
     direction: prop.direction, entryPrice: price, qty,
     stopLoss: round4(stopLoss), takeProfit: round4(takeProfit),
     pnl: 0, strategy: prop.strategy, confidence: prop.confidence,
@@ -194,7 +210,21 @@ async function tick(): Promise<void> {
   useStore.getState().patchTrade(trade.id, { status: 'Approved' })
   AuditLogger.info('RISK', `Trade approved: ${prop.symbol}`, decision.summary)
 
-  const adapter = brokers.paper // live routing stays locked in this build
+  // Adapter routing: live mode routes to IBKR only when the full chain is
+  // satisfied — mode=live, unlock chain complete, gateway healthy, and the
+  // user has explicitly pre-authorized live orders.
+  const liveReady = s.tradingMode === 'live' && s.liveUnlocked && s.adminApprovedLive && brokers.ibkr.healthy()
+  if (s.tradingMode === 'live' && !liveReady) {
+    useStore.getState().patchTrade(trade.id, { status: 'Rejected', closeReason: 'Live mode selected but live routing prerequisites are not met (unlock chain + healthy IBKR gateway required).' })
+    AuditLogger.warn('ORDER', `Live order blocked: ${prop.symbol}`, 'Unlock chain incomplete or gateway unhealthy.')
+    return
+  }
+  if (liveReady && !s.firstLiveOrderAuthorized) {
+    useStore.getState().patchTrade(trade.id, { status: 'Rejected', closeReason: 'First live order requires explicit pre-authorization (Brokers page).' })
+    AuditLogger.warn('ORDER', `Live order held: ${prop.symbol}`, 'User has not pre-authorized the first live order.')
+    return
+  }
+  const adapter = liveReady ? brokers.ibkr : brokers.paper
   const preview = adapter.previewOrder({
     symbol: prop.symbol, market: prop.market, direction: prop.direction,
     qty, refPrice: price, stopLoss, takeProfit, mode: s.tradingMode

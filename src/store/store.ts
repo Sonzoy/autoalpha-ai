@@ -1,8 +1,8 @@
 import { create } from 'zustand'
 import type {
-  AssetState, AuditEvent, BrokerConnState, BrokerId, EtoroConfig, IbkrConfig, IntelSnapshot,
-  PerfPoint, Position, PriceSource, Regime, RiskSettings, SimSpeed, StrategyName, Trade,
-  TradingMode, UserProfile
+  AssetState, AuditEvent, BrokerConnState, BrokerId, CustomFeed, EtoroConfig, IbkrConfig,
+  IntelSnapshot, PerfPoint, Position, PriceSource, Regime, RiskSettings, SimSpeed, StrategyName,
+  ThemeMode, Trade, TradingMode, UserProfile
 } from '../types'
 import { RISK_DEFAULTS } from '../types'
 import { AuditLogger } from '../engine/AuditLogger'
@@ -75,6 +75,10 @@ export interface Workspace {
   brokerConn: Record<BrokerId, BrokerConnState>
   brokerConfig: { ibkr: IbkrConfig | null; etoro: EtoroConfig | null }
   marketKeys: { finnhub: string }
+  customFeeds: CustomFeed[]
+  theme: ThemeMode
+  liveDataOnly: boolean
+  firstLiveOrderAuthorized: boolean
   killSwitch: boolean
   adminApprovedLive: boolean
 }
@@ -93,6 +97,10 @@ export function freshWorkspace(): Workspace {
     brokerConn: initialBrokerConn(),
     brokerConfig: { ibkr: null, etoro: null },
     marketKeys: { finnhub: '' },
+    customFeeds: [],
+    theme: 'dark',
+    liveDataOnly: true, // never trade on simulated prices unless explicitly allowed
+    firstLiveOrderAuthorized: false,
     killSwitch: false, adminApprovedLive: false
   }
 }
@@ -182,6 +190,12 @@ export interface AppState extends Workspace {
   setBrokerConn: (id: BrokerId, patch: Partial<BrokerConnState>) => void
   setBrokerConfig: (id: 'ibkr' | 'etoro', cfg: IbkrConfig | EtoroConfig | null) => void
   setMarketKey: (provider: 'finnhub', key: string) => void
+  addCustomFeed: (f: CustomFeed) => void
+  removeCustomFeed: (id: string) => void
+  setTheme: (t: ThemeMode) => void
+  setLiveDataOnly: (v: boolean) => void
+  setFirstLiveOrderAuthorized: (v: boolean) => void
+  setTradingMode: (m: TradingMode) => void
   setKillSwitch: (v: boolean) => void
   setAdminApprovedLive: (v: boolean) => void
   resetDemo: () => void
@@ -294,6 +308,27 @@ export const useStore = create<AppState>()((set, get) => ({
   setMarketKey: (provider, key) => {
     set(s => ({ marketKeys: { ...s.marketKeys, [provider]: key } }))
     AuditLogger.info('MARKET', `${provider} market-data key ${key ? 'saved' : 'cleared'} (stored locally)`)
+  },
+  addCustomFeed: f => {
+    set(s => ({ customFeeds: [...s.customFeeds.filter(x => x.id !== f.id), f] }))
+    AuditLogger.info('MARKET', `Custom price feed added: ${f.name} → ${f.symbol}`, 'Feed URL and optional auth header stored only in this browser.')
+  },
+  removeCustomFeed: id => {
+    set(s => ({ customFeeds: s.customFeeds.filter(x => x.id !== id) }))
+    AuditLogger.info('MARKET', 'Custom price feed removed')
+  },
+  setTheme: t => set({ theme: t }),
+  setLiveDataOnly: v => {
+    set({ liveDataOnly: v })
+    AuditLogger.info('USER', v ? 'Live-data-only trading enabled — simulated-price assets excluded from trading' : 'Simulated-price assets allowed for trading (demo mode)')
+  },
+  setFirstLiveOrderAuthorized: v => {
+    set({ firstLiveOrderAuthorized: v })
+    AuditLogger[v ? 'warn' : 'info']('USER', v ? 'First live order pre-authorized by user' : 'Live order pre-authorization revoked')
+  },
+  setTradingMode: m => {
+    set({ tradingMode: m })
+    AuditLogger[m === 'live' ? 'warn' : 'info']('USER', m === 'live' ? 'Trading mode switched to LIVE' : 'Trading mode switched to PAPER')
   },
 
   setKillSwitch: v => {

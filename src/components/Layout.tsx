@@ -1,9 +1,11 @@
 import React from 'react'
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
+import { useState } from 'react'
 import {
   LayoutDashboard, BrainCircuit, History, ShieldAlert, Radar, PieChart,
-  Link2, Settings2, LogOut, OctagonX, Activity
+  Link2, Settings2, LogOut, OctagonX, Activity, Sun, Moon
 } from 'lucide-react'
+import { Modal } from './ui'
 import { useStore } from '../store/store'
 import { Badge, Segmented, Toggle } from './ui'
 import { DISCLAIMER_SHORT } from '../types'
@@ -28,6 +30,17 @@ export default function Layout() {
   const setSpeed = useStore(s => s.setSpeed)
   const brokerConn = useStore(s => s.brokerConn)
   const logOut = useStore(s => s.logOut)
+  const theme = useStore(s => s.theme)
+  const setTheme = useStore(s => s.setTheme)
+  const liveUnlocked = useStore(s => s.liveUnlocked)
+  const adminApprovedLive = useStore(s => s.adminApprovedLive)
+  const setTradingMode = useStore(s => s.setTradingMode)
+  const [liveBlocked, setLiveBlocked] = useState(false)
+
+  const switchMode = (m: 'paper' | 'live') => {
+    if (m === 'live' && !(liveUnlocked && adminApprovedLive)) { setLiveBlocked(true); return }
+    setTradingMode(m)
+  }
 
   const regimeTone = regime === 'Trending' ? 'green' : regime === 'Risk-Off' ? 'red' : regime === 'Volatile' ? 'amber' : 'blue'
   const paperOk = brokerConn.paper.status === 'connected'
@@ -61,9 +74,10 @@ export default function Layout() {
       <div className="main">
         <header className="topbar">
           <h1>{TITLES[loc.pathname] ?? 'AutoAlpha AI'}</h1>
-          <Badge tone={tradingMode === 'paper' ? 'blue' : 'green'}>
-            {tradingMode === 'paper' ? 'PAPER TRADING' : 'LIVE'}
-          </Badge>
+          <div className="seg" title="Trading mode">
+            <button className={tradingMode === 'paper' ? 'active' : ''} onClick={() => switchMode('paper')}>PAPER</button>
+            <button className={tradingMode === 'live' ? 'active' : ''} style={tradingMode === 'live' ? { background: 'var(--red)' } : undefined} onClick={() => switchMode('live')}>LIVE</button>
+          </div>
           <Badge tone={regimeTone as any}>{regime}</Badge>
           <Badge tone={paperOk ? 'green' : 'gray'}>{paperOk ? 'Broker OK' : 'Broker offline'}</Badge>
           {killSwitch && <Badge tone="red">KILL SWITCH</Badge>}
@@ -77,10 +91,24 @@ export default function Layout() {
             <span className="small">AI</span>
             <Toggle on={autoTrading} disabled={emergencyStop || killSwitch} onChange={setAutoTrading} />
           </div>
+          <button className="btn sm ghost" title="Toggle light/dark theme" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>
+            {theme === 'dark' ? <Sun size={14} /> : <Moon size={14} />}
+          </button>
           <button className={`btn sm ${emergencyStop ? '' : 'danger'}`} onClick={() => setEmergencyStop(!emergencyStop)}>
             <OctagonX size={14} /> {emergencyStop ? 'Release stop' : 'Emergency stop'}
           </button>
         </header>
+
+        <Modal open={liveBlocked} onClose={() => setLiveBlocked(false)}>
+          <h2>Live trading is locked</h2>
+          <p>Switching to live mode requires the full authorization chain: a connected real broker (IBKR gateway),
+            a live-trading unlock request, compliance review with admin approval, and your explicit enablement —
+            all on the Brokers page. This protects you from accidentally routing real orders.</p>
+          <div className="row spread mt">
+            <button className="btn" onClick={() => setLiveBlocked(false)}>Close</button>
+            <a className="btn primary" href="#/brokers" onClick={() => setLiveBlocked(false)}>Open Brokers page</a>
+          </div>
+        </Modal>
 
         <main className="content"><Outlet /></main>
 

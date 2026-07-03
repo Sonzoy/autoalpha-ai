@@ -53,6 +53,10 @@ export const StrategySelector = {
       const snap = intel[asset.symbol]
       if (!snap) continue
       if (held.has(asset.symbol)) continue
+      // Data-sufficiency guard: never signal on thin history
+      if (asset.history.length < 40) continue
+      // Liquidity floor: illiquid conditions distort fills; stand aside
+      if (snap.liquidity < 35) continue
       // Strong sentiment vs trend conflict → avoid the asset entirely
       const sent = snap.newsSentiment * 0.6 + snap.socialSentiment * 0.4
       if (Math.abs(sent) > 55 && Math.abs(snap.trend) > 55 && Math.sign(sent) !== Math.sign(snap.trend)) continue

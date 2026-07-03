@@ -41,6 +41,20 @@ export class MarketSimulator {
     }
   }
 
+  /** Replace an asset's history with real market history (from live APIs). */
+  applyLiveHistory(histories: Record<string, number[]>): void {
+    for (const a of this.assets) {
+      const h = histories[a.symbol]
+      if (!h || h.length < 20) continue
+      a.history = h.slice(-HISTORY_CAP)
+      a.price = h[h.length - 1]
+      a.prevPrice = h[h.length - 2] ?? a.price
+      a.dayOpen = h[Math.max(0, h.length - 24)] // ~24h ago on hourly data
+      this.liveSymbols.add(a.symbol)
+      this.computeIntel(a)
+    }
+  }
+
   /** Apply real prices from live feeds. Live assets stop following GBM. */
   applyLiveQuotes(quotes: Record<string, { price: number }>): void {
     for (const a of this.assets) {
