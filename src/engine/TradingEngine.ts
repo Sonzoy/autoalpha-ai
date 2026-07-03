@@ -163,11 +163,12 @@ async function tick(): Promise<void> {
   // 5–10. Propose → risk check → preview → execute → fill → audit
   ticksSinceTrade++
   const s = useStore.getState()
-  if (!s.autoTrading || s.autoPaused || s.emergencyStop || s.killSwitch) return
   // Clear a stale "broker unhealthy" note once the link has recovered
+  // (unconditional — the note must never outlive the condition it describes)
   if (brokers.paper.healthy() && s.engineNote.startsWith('Broker link unhealthy')) {
-    useStore.getState().setEngineStatus(s.engineMode, 'Broker link recovered — scanning for qualified setups.', s.lastConfidence)
+    useStore.getState().setEngineStatus(s.engineMode, 'Scanning for qualified setups.', s.lastConfidence)
   }
+  if (!s.autoTrading || s.autoPaused || s.emergencyStop || s.killSwitch) return
   if (ticksSinceTrade < 5 || Math.random() > 0.45) return
   // Don't generate proposals while the broker link is unhealthy — wait for recovery
   if (!brokers.paper.healthy()) {
