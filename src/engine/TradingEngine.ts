@@ -270,15 +270,6 @@ async function tick(): Promise<void> {
     ? s.brokerPortfolio.totalUsd
     : equity
   const qty = roundQty((sizingEquity * prop.allocationPct / 100) / price)
-
-  // User-configurable minimum trade size (dust protection): skip orders
-  // whose value is below the threshold — commissions eat tiny trades alive.
-  const minTrade = s.settings.minTradeUsd ?? 0
-  if (qty * price < minTrade) {
-    useStore.getState().patchTrade(trade.id, { status: 'Rejected', closeReason: `Below minimum trade size: ${(qty * price).toFixed(2)} USD vs ${minTrade} USD minimum (Risk Management setting).` })
-    AuditLogger.info('RISK', `Trade skipped: ${prop.symbol} below minimum size`, `${(qty * price).toFixed(2)} < ${minTrade} USD. Raise allocation % or lower the minimum.`)
-    return
-  }
   const stopLoss = prop.direction === 'Long' ? price * (1 - prop.stopLossPct / 100) : price * (1 + prop.stopLossPct / 100)
   const takeProfit = prop.direction === 'Long' ? price * (1 + prop.takeProfitPct / 100) : price * (1 - prop.takeProfitPct / 100)
 
@@ -293,6 +284,15 @@ async function tick(): Promise<void> {
     regime: prop.regime, openedAt: Date.now()
   }
   useStore.getState().addTrade(trade)
+
+  // User-configurable minimum trade size (dust protection): skip orders
+  // whose value is below the threshold — commissions eat tiny trades alive.
+  const minTrade = s.settings.minTradeUsd ?? 0
+  if (qty * price < minTrade) {
+    useStore.getState().patchTrade(trade.id, { status: 'Rejected', closeReason: `Below minimum trade size: ${(qty * price).toFixed(2)} USD vs ${minTrade} USD minimum (Risk Management setting).` })
+    AuditLogger.info('RISK', `Trade skipped: ${prop.symbol} below minimum size`, `${(qty * price).toFixed(2)} < ${minTrade} USD. Raise allocation % or lower the minimum.`)
+    return
+  }
 
   if (!decision.approved) {
     useStore.getState().patchTrade(trade.id, { status: 'Rejected', closeReason: decision.summary })
