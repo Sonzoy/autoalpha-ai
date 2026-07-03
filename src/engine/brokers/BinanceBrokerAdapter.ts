@@ -48,6 +48,16 @@ export class BinanceBrokerAdapter implements BrokerAdapter {
   private cfg: BinanceConfig | null = null
   private filters: Record<string, SymbolFilter> = {}
   private usdtFree = 0
+  private balances: { asset: string; qty: number }[] = []
+
+  /** Cached real account balances (refreshed on connect/sync). */
+  getCachedBalances(): { asset: string; qty: number }[] { return this.balances }
+
+  private cacheBalances(acctJson: any): void {
+    this.balances = (acctJson?.balances ?? [])
+      .map((b: any) => ({ asset: b.asset, qty: Number(b.free) + Number(b.locked) }))
+      .filter((b: { qty: number }) => b.qty > 0)
+  }
 
   configure(cfg: BinanceConfig | null): void {
     this.cfg = cfg
@@ -87,6 +97,7 @@ export class BinanceBrokerAdapter implements BrokerAdapter {
       }
       const usdt = (acct.j?.balances ?? []).find((b: any) => b.asset === 'USDT')
       this.usdtFree = Number(usdt?.free ?? 0)
+      this.cacheBalances(acct.j)
       // Exchange filters so order quantities respect Binance's lot rules
       try {
         const symbols = encodeURIComponent(JSON.stringify(Object.values(SYMBOL_MAP)))
@@ -187,6 +198,7 @@ export class BinanceBrokerAdapter implements BrokerAdapter {
       if (!acct.ok) { this.st = 'error'; return { ok: false, message: `Binance sync failed: ${acct.j?.msg ?? acct.status}` } }
       const usdt = (acct.j?.balances ?? []).find((b: any) => b.asset === 'USDT')
       this.usdtFree = Number(usdt?.free ?? 0)
+      this.cacheBalances(acct.j)
       return { ok: true, message: `Binance balances refreshed. USDT available: ${this.usdtFree.toFixed(2)}.` }
     } catch (e) {
       return { ok: false, message: `Binance sync error: ${String(e).slice(0, 80)}` }

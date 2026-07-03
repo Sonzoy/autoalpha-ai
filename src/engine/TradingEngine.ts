@@ -38,7 +38,34 @@ let ticksSinceTrade = 99
 let busy = false
 let lastUser: string | null = null
 let lastLiveFetch = 0
+let lastPortfolioSync = 0
 let connectingPaper = false
+
+const STABLES = new Set(['USDT', 'USDC', 'FDUSD', 'BUSD', 'DAI', 'TUSD'])
+
+/**
+ * Refresh the REAL account snapshot from the connected broker (Binance)
+ * every 60s — the dashboard shows this as the authoritative portfolio in
+ * live mode, and live order sizing is based on it.
+ */
+function syncBrokerPortfolio(): void {
+  if (Date.now() - lastPortfolioSync < 60_000) return
+  lastPortfolioSync = Date.now()
+  const bn = brokers.binance as any
+  if (!bn.healthy?.()) return
+  void bn.sync().then(() => {
+    const priceOf = (sym: string) => useStore.getState().assets.find(a => a.symbol === sym)?.price ?? 0
+    const rows = (bn.getCachedBalances() as { asset: string; qty: number }[])
+      .map(b => {
+        const usd = STABLES.has(b.asset) ? b.qty : (priceOf(`${b.asset}/USD`) > 0 ? b.qty * priceOf(`${b.asset}/USD`) : null)
+        return { asset: b.asset, qty: b.qty, usd }
+      })
+      .sort((a, b) => (b.usd ?? 0) - (a.usd ?? 0))
+      .slice(0, 10)
+    const totalUsd = rows.reduce((a, r) => a + (r.usd ?? 0), 0)
+    useStore.getState().setBrokerPortfolio({ broker: 'binance', totalUsd, syncedAt: Date.now(), balances: rows })
+  }).catch(() => { /* next cycle retries */ })
+}
 
 /**
  * Self-heal the paper venue connection. Persisted state can claim
@@ -78,6 +105,7 @@ async function tick(): Promise<void> {
   const st = useStore.getState()
   if (!st.currentUser || !st.profile.onboarded) return
   ensurePaperConnected()
+  syncBrokerPortfolio()
 
   // 1–2. Market data + sentiment update
   const simulator = getSimulator()
@@ -236,7 +264,12 @@ async function tick(): Promise<void> {
   const decision = RiskManager.check(prop, riskCtx(equity))
 
   const price = priceOf(prop.symbol)
-  const qty = roundQty((equity * prop.allocationPct / 100) / price)
+  // Live mode with a synced real account: size orders from REAL equity —
+  // the internal ledger is only a mirror.
+  const sizingEquity = (s.tradingMode === 'live' && s.brokerPortfolio && s.brokerPortfolio.totalUsd > 0)
+    ? s.brokerPortfolio.totalUsd
+    : equity
+  const qty = roundQty((sizingEquity * prop.allocationPct / 100) / price)
   const stopLoss = prop.direction === 'Long' ? price * (1 - prop.stopLossPct / 100) : price * (1 + prop.stopLossPct / 100)
   const takeProfit = prop.direction === 'Long' ? price * (1 + prop.takeProfitPct / 100) : price * (1 - prop.takeProfitPct / 100)
 

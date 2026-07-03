@@ -200,6 +200,14 @@ export interface BinanceConfig {
   apiSecret: string
 }
 
+/** Snapshot of the REAL account at a connected broker (authoritative). */
+export interface BrokerPortfolio {
+  broker: BrokerId
+  totalUsd: number
+  syncedAt: number
+  balances: { asset: string; qty: number; usd: number | null }[]
+}
+
 export const RISK_DEFAULTS: Record<RiskProfile, RiskSettings> = {
   Conservative: {
     maxAllocationPct: 2, stopLossPct: 1, takeProfitPct: 2,

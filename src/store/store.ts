@@ -1,8 +1,8 @@
 import { create } from 'zustand'
 import type {
-  AssetState, AuditEvent, BinanceConfig, BrokerConnState, BrokerId, CustomFeed, EtoroConfig,
-  IbkrConfig, IntelSnapshot, PerfPoint, Position, PriceSource, Regime, RiskSettings, SimSpeed,
-  StrategyName, ThemeMode, Trade, TradingMode, UserProfile
+  AssetState, AuditEvent, BinanceConfig, BrokerConnState, BrokerId, BrokerPortfolio, CustomFeed,
+  EtoroConfig, IbkrConfig, IntelSnapshot, PerfPoint, Position, PriceSource, Regime, RiskSettings,
+  SimSpeed, StrategyName, ThemeMode, Trade, TradingMode, UserProfile
 } from '../types'
 import { RISK_DEFAULTS } from '../types'
 import { AuditLogger } from '../engine/AuditLogger'
@@ -77,6 +77,7 @@ export interface Workspace {
   brokerConfig: { ibkr: IbkrConfig | null; etoro: EtoroConfig | null; binance: BinanceConfig | null }
   marketKeys: { finnhub: string }
   customFeeds: CustomFeed[]
+  brokerPortfolio: BrokerPortfolio | null
   theme: ThemeMode
   liveDataOnly: boolean
   firstLiveOrderAuthorized: boolean
@@ -99,6 +100,7 @@ export function freshWorkspace(): Workspace {
     brokerConfig: { ibkr: null, etoro: null, binance: null },
     marketKeys: { finnhub: '' },
     customFeeds: [],
+    brokerPortfolio: null,
     theme: 'dark',
     liveDataOnly: true, // never trade on simulated prices unless explicitly allowed
     firstLiveOrderAuthorized: false,
@@ -204,6 +206,7 @@ export interface AppState extends Workspace {
   setMarketKey: (provider: 'finnhub', key: string) => void
   addCustomFeed: (f: CustomFeed) => void
   removeCustomFeed: (id: string) => void
+  setBrokerPortfolio: (p: BrokerPortfolio | null) => void
   setTheme: (t: ThemeMode) => void
   setLiveDataOnly: (v: boolean) => void
   setFirstLiveOrderAuthorized: (v: boolean) => void
@@ -329,6 +332,7 @@ export const useStore = create<AppState>()((set, get) => ({
     set(s => ({ customFeeds: s.customFeeds.filter(x => x.id !== id) }))
     AuditLogger.info('MARKET', 'Custom price feed removed')
   },
+  setBrokerPortfolio: p => set({ brokerPortfolio: p }),
   setTheme: t => set({ theme: t }),
   setLiveDataOnly: v => {
     set({ liveDataOnly: v })

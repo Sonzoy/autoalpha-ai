@@ -23,6 +23,9 @@ export default function Dashboard() {
   const speed = useStore(s => s.speed)
   const setSpeed = useStore(s => s.setSpeed)
   const assetSources = useStore(s => s.assetSources)
+  const tradingMode = useStore(s => s.tradingMode)
+  const brokerPortfolio = useStore(s => s.brokerPortfolio)
+  const liveAcct = tradingMode === 'live' && brokerPortfolio && brokerPortfolio.totalUsd > 0
 
   const equity = computeEquity({ cash, positions, assets })
   const dailyPnl = equity - dayStartEquity
@@ -50,17 +53,24 @@ export default function Dashboard() {
         <div className="card hero-card">
           <div className="row spread wrap">
             <div>
-              <div className="stat-label">Portfolio value</div>
-              <div className="hero-value">{fmtUsd(equity, 0)}</div>
+              <div className="stat-label">{liveAcct ? `${brokerPortfolio!.broker.toUpperCase()} account value (real)` : 'Portfolio value'}</div>
+              <div className="hero-value">{fmtUsd(liveAcct ? brokerPortfolio!.totalUsd : equity, 0)}</div>
               <div className="row wrap" style={{ marginTop: 8 }}>
-                <Badge tone={dailyPnl >= 0 ? 'green' : 'red'}>{fmtUsd(dailyPnl)} today ({fmtPct(dailyPct)})</Badge>
-                <Badge tone={totalPct >= 0 ? 'green' : 'red'}>{fmtPct(totalPct)} all-time</Badge>
+                {liveAcct ? <>
+                  <Badge tone="green">LIVE · synced {Math.max(0, Math.round((Date.now() - brokerPortfolio!.syncedAt) / 1000))}s ago</Badge>
+                  {brokerPortfolio!.balances.slice(0, 3).map(b => (
+                    <Badge key={b.asset} tone="blue">{b.asset} {b.qty < 1 ? b.qty.toFixed(5) : b.qty.toFixed(2)}{b.usd !== null ? ` ≈ ${fmtUsd(b.usd, 0)}` : ''}</Badge>
+                  ))}
+                </> : <>
+                  <Badge tone={dailyPnl >= 0 ? 'green' : 'red'}>{fmtUsd(dailyPnl)} today ({fmtPct(dailyPct)})</Badge>
+                  <Badge tone={totalPct >= 0 ? 'green' : 'red'}>{fmtPct(totalPct)} all-time</Badge>
+                </>}
               </div>
             </div>
             <div style={{ textAlign: 'right' }}>
-              <div className="stat-label">Cash available</div>
-              <div className="stat-value" style={{ fontSize: 18 }}>{fmtUsd(cash, 0)}</div>
-              <div className="stat-sub">{liveCount} live-priced assets</div>
+              <div className="stat-label">{liveAcct ? 'Mirror ledger (in-app)' : 'Cash available'}</div>
+              <div className="stat-value" style={{ fontSize: 18 }}>{fmtUsd(liveAcct ? equity : cash, 0)}</div>
+              <div className="stat-sub">{liveCount} live-priced assets{liveAcct ? ' · broker is authoritative' : ''}</div>
             </div>
           </div>
           <div style={{ height: 190, marginTop: 14 }}>
