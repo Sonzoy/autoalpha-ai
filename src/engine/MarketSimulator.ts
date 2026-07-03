@@ -18,6 +18,9 @@ export class MarketSimulator {
   intel: Record<string, IntelSnapshot> = {}
   macroRisk = 35 // 0..100 global slow-moving risk factor
   liveSymbols = new Set<string>() // assets currently driven by live feeds (GBM skipped)
+  private lastBarAt: Record<string, number> = {} // live assets: 5-minute time-bucketed bars
+
+  static readonly LIVE_BAR_MS = 300_000 // 5 min — matches the seeded history granularity
   private sentiment: Record<string, SentimentState> = {}
   private driftBias: Record<string, number> = {} // slow-moving per-asset drift regime
   private anchors: Record<string, number> = {} // long-run anchor to stop unrealistic drift
@@ -55,8 +58,14 @@ export class MarketSimulator {
     }
   }
 
-  /** Apply real prices from live feeds. Live assets stop following GBM. */
+  /**
+   * Apply real prices from live feeds. Prices update tick-by-tick (so stops,
+   * targets, and P&L are realtime), but HISTORY bars are time-bucketed to 30s
+   * so momentum/volatility scores are computed on a meaningful timeframe —
+   * per-tick bars made every signal read as zero on real market data.
+   */
   applyLiveQuotes(quotes: Record<string, { price: number }>): void {
+    const now = Date.now()
     for (const a of this.assets) {
       const q = quotes[a.symbol]
       if (!q) continue
@@ -64,12 +73,22 @@ export class MarketSimulator {
       if (a.price !== q.price) {
         a.prevPrice = a.price
         a.price = q.price
-        a.history.push(q.price)
-        if (a.history.length > HISTORY_CAP) a.history.shift()
         // First live quote after a simulated run can jump: reset day open
         if (Math.abs(q.price - a.dayOpen) / a.dayOpen > 0.2) a.dayOpen = q.price
-        this.computeIntel(a)
       }
+      const lastBar = this.lastBarAt[a.symbol] ?? 0
+      if (now - lastBar >= MarketSimulator.LIVE_BAR_MS) {
+        this.lastBarAt[a.symbol] = now
+        const prevBar = a.history[a.history.length - 1] ?? q.price
+        a.history.push(q.price)
+        if (a.history.length > HISTORY_CAP) a.history.shift()
+        // Sentiment evolves on bar closes for live assets, driven by real bar returns
+        const s = this.sentiment[a.symbol]
+        const barRet = prevBar ? (q.price - prevBar) / prevBar : 0
+        s.news = clamp(s.news * 0.96 + barRet * 3500 + rand(-3, 3) + (Math.random() < 0.02 ? rand(-25, 25) : 0), -95, 95)
+        s.social = clamp(s.social * 0.93 + s.news * 0.06 + barRet * 5000 + rand(-4, 4), -95, 95)
+      }
+      this.computeIntel(a)
     }
   }
 
@@ -92,16 +111,9 @@ export class MarketSimulator {
       5, 95
     )
     for (const a of this.assets) {
-      // Live-fed assets: prices come from real feeds via applyLiveQuotes;
-      // only sentiment/intel evolve here.
-      if (this.liveSymbols.has(a.symbol)) {
-        const sLive = this.sentiment[a.symbol]
-        const retLive = a.prevPrice ? (a.price - a.prevPrice) / a.prevPrice : 0
-        sLive.news = clamp(sLive.news * 0.97 + retLive * 400 + rand(-4, 4), -95, 95)
-        sLive.social = clamp(sLive.social * 0.94 + sLive.news * 0.05 + retLive * 600 + rand(-6, 6), -95, 95)
-        this.computeIntel(a)
-        continue
-      }
+      // Live-fed assets: prices, bars, and sentiment are handled in
+      // applyLiveQuotes on real data — skip the simulation path entirely.
+      if (this.liveSymbols.has(a.symbol)) continue
       // Slowly rotate drift regimes so trends form and break
       if (Math.random() < 0.02) this.driftBias[a.symbol] = rand(-1, 1)
       const s = this.sentiment[a.symbol]
@@ -129,6 +141,7 @@ export class MarketSimulator {
   }
 
   private computeIntel(a: AssetState): void {
+    const live = this.liveSymbols.has(a.symbol)
     const h = a.history
     const n = h.length
     const look = Math.min(40, n - 1)
@@ -137,14 +150,20 @@ export class MarketSimulator {
     const rets: number[] = []
     for (let i = Math.max(1, n - 30); i < n; i++) rets.push(Math.log(h[i] / h[i - 1]))
     const sd = stdev(rets)
-    // normalize by the asset's expected per-tick sigma so ~45 = normal conditions
-    const volScore = clamp((sd / (a.vol * 0.045)) * 45, 3, 100)
-    const trend = clamp(mom * 550, -100, 100)
+    // Normalize so ~45 = normal conditions for the bar timeframe in use:
+    // live assets use 5-min bars (expected sd ≈ annVol * sqrt(5min/1y) ≈ annVol*0.0031),
+    // simulated assets use the demo-scaled sigma.
+    const volNorm = live ? a.vol * 0.0031 : a.vol * 0.045
+    const volScore = clamp((sd / volNorm) * 45, 3, 100)
+    // Trend scale matches the timeframe: 40 live bars ≈ 3.3 hours of real
+    // market movement, where ±1% is a meaningful directional move.
+    const trend = clamp(mom * (live ? 4000 : 550), -100, 100)
     const s = this.sentiment[a.symbol]
     const liquidity = clamp(88 - this.macroRisk * 0.25 - volScore * 0.15 + rand(-3, 3), 20, 98)
     const volumeAnomaly = clamp(volScore * 0.5 + Math.abs(trend) * 0.2 + rand(0, 15), 0, 100)
     this.intel[a.symbol] = {
       symbol: a.symbol,
+      live,
       trend: round1(trend),
       volatility: round1(volScore),
       newsSentiment: round1(s.news),

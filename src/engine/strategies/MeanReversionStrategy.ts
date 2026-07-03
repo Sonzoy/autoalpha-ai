@@ -15,9 +15,13 @@ export const MeanReversionStrategy = {
     const win = h.slice(-30)
     const mean = win.reduce((a, b) => a + b, 0) / win.length
     const devPct = ((asset.price - mean) / mean) * 100
-    if (Math.abs(devPct) < 0.9) return null
+    // Live 30s bars: intraday deviations are naturally smaller than the
+    // simulator's exaggerated moves — thresholds scale with the timeframe.
+    const minDev = intel.live ? 0.35 : 0.9
+    const devScale = intel.live ? 35 : 12
+    if (Math.abs(devPct) < minDev) return null
     const direction = devPct > 0 ? 'Short' : 'Long'
-    const score = Math.min(90, 38 + Math.abs(devPct) * 12 + Math.max(0, 50 - intel.volatility) * 0.2)
+    const score = Math.min(90, 38 + Math.abs(devPct) * devScale + Math.max(0, 50 - intel.volatility) * 0.2)
     return {
       strategy: this.name,
       direction,

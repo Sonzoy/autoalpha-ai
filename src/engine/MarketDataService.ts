@@ -50,7 +50,8 @@ export const MarketDataService = {
     const out: Record<string, number[]> = {}
     await Promise.all(Object.entries(COINGECKO_IDS).map(async ([sym, id]) => {
       if (seededHistory.has(sym)) return
-      const j = await getJson(`https://api.coingecko.com/api/v3/coins/${id}/market_chart?vs_currency=usd&days=2`)
+      // days=1 → 5-minute granularity, matching the live bar cadence exactly
+      const j = await getJson(`https://api.coingecko.com/api/v3/coins/${id}/market_chart?vs_currency=usd&days=1`)
       const prices: number[] | undefined = j?.prices?.map((p: [number, number]) => p[1])
       if (prices && prices.length > 20) {
         out[sym] = prices.slice(-160)
@@ -59,7 +60,7 @@ export const MarketDataService = {
     }))
     if (Object.keys(out).length) {
       AuditLogger.info('MARKET', `Real price history seeded for ${Object.keys(out).join(', ')}`,
-        'Momentum and volatility scores for these assets are computed from actual market history (CoinGecko, ~48h hourly).')
+        'Momentum and volatility scores computed from actual market history (CoinGecko 5-minute bars, ~13h).')
     }
     return out
   },

@@ -131,8 +131,10 @@ async function tick(): Promise<void> {
       if (pos.direction === 'Long' && price >= pos.takeProfit) closeReason = 'Take profit hit'
       if (pos.direction === 'Short' && price <= pos.takeProfit) closeReason = 'Take profit hit'
     }
-    // time-based exit: ~200 ticks max hold
-    if (!closeReason && Date.now() - pos.openedAt > 200 * 2500) closeReason = 'Max holding period reached'
+    // time-based exit: live-priced assets hold up to 4h (real markets need
+    // time to reach targets); simulated assets keep the short demo horizon
+    const isLivePos = (useStore.getState().assetSources[pos.symbol] ?? 'simulated') !== 'simulated'
+    if (!closeReason && Date.now() - pos.openedAt > (isLivePos ? 4 * 3600_000 : 200 * 2500)) closeReason = 'Max holding period reached'
     // emergency stop / kill switch flatten
     if (!closeReason && (s.emergencyStop || s.killSwitch)) closeReason = s.killSwitch ? 'Kill switch: flattening positions' : 'Emergency stop: flattening positions'
 

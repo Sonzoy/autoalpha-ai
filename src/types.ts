@@ -39,6 +39,7 @@ export interface AssetState {
 
 export interface IntelSnapshot {
   symbol: string
+  live?: boolean // scores computed from live 30s bars vs simulated bars
   trend: number //  -100..100
   volatility: number // 0..100
   newsSentiment: number // -100..100
