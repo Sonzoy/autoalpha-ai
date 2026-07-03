@@ -1,9 +1,10 @@
-import React, { useEffect } from 'react'
+import React, { useEffect, useState } from 'react'
 import { HashRouter, Navigate, Route, Routes } from 'react-router-dom'
 import { useStore } from './store/store'
 import { brokers, engineTick } from './engine/TradingEngine'
 import Layout from './components/Layout'
 import Auth from './pages/Auth'
+import Landing from './pages/Landing'
 import Onboarding from './pages/Onboarding'
 import Dashboard from './pages/Dashboard'
 import StrategyEngine from './pages/StrategyEngine'
@@ -21,6 +22,7 @@ export default function App() {
   const onboarded = useStore(s => s.profile.onboarded)
   const speed = useStore(s => s.speed)
   const theme = useStore(s => s.theme)
+  const [showAuth, setShowAuth] = useState(false)
 
   // Apply theme to the document root
   useEffect(() => {
@@ -69,7 +71,7 @@ export default function App() {
     return () => worker?.terminate()
   }, [currentUser, onboarded, speed])
 
-  if (!currentUser) return <Auth />
+  if (!currentUser) return showAuth ? <Auth /> : <Landing onLaunch={() => setShowAuth(true)} />
   if (!onboarded) return <Onboarding />
 
   return (
