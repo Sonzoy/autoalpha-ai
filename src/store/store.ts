@@ -131,6 +131,7 @@ function loadWorkspace(email: string): Workspace | null {
       ws.brokerConn = { ...fresh.brokerConn, ...(parsed.brokerConn ?? {}) }
       ws.brokerConfig = { ...fresh.brokerConfig, ...(parsed.brokerConfig ?? {}) }
       ws.marketKeys = { ...fresh.marketKeys, ...(parsed.marketKeys ?? {}) }
+      ws.settings = { ...fresh.settings, ...(parsed.settings ?? {}) } // backfill new risk settings
       return ws
     }
   } catch { /* corrupted workspace — fresh */ }

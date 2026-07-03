@@ -58,6 +58,8 @@ export default function RiskManagement() {
         <Num label="Take profit" value={settings.takeProfitPct} onChange={v => updateSettings({ takeProfitPct: v })} min={1} max={16} step={0.5} suffix="%" />
         <Num label="Max daily loss" value={settings.dailyLossLimitPct} onChange={v => updateSettings({ dailyLossLimitPct: v })} min={1} max={12} step={0.5} suffix="%" />
         <Num label="Max drawdown pause" value={settings.maxDrawdownPct} onChange={v => updateSettings({ maxDrawdownPct: v })} min={2} max={25} step={1} suffix="%" />
+        <Num label="Minimum trade size" value={settings.minTradeUsd ?? 15} onChange={v => updateSettings({ minTradeUsd: v })} min={5} max={500} step={5} suffix=" USD" />
+        <p className="small" style={{ marginTop: -6 }}>Orders below this value are skipped — commissions make dust trades unprofitable. Binance additionally enforces its own ~10 USDT minimum per order.</p>
 
         <h3 className="mt">Protections</h3>
         <div className="row spread" style={{ padding: '8px 0' }}>

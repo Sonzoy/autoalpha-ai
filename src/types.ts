@@ -138,6 +138,7 @@ export interface RiskSettings {
   takeProfitPct: number
   dailyLossLimitPct: number
   maxDrawdownPct: number
+  minTradeUsd: number // orders below this value are skipped (dust protection)
   stopLossEnabled: boolean
   takeProfitEnabled: boolean
   trailingStopEnabled: boolean
@@ -211,17 +212,17 @@ export interface BrokerPortfolio {
 export const RISK_DEFAULTS: Record<RiskProfile, RiskSettings> = {
   Conservative: {
     maxAllocationPct: 2, stopLossPct: 1, takeProfitPct: 2,
-    dailyLossLimitPct: 2, maxDrawdownPct: 5,
+    dailyLossLimitPct: 2, maxDrawdownPct: 5, minTradeUsd: 15,
     stopLossEnabled: true, takeProfitEnabled: true, trailingStopEnabled: false
   },
   Balanced: {
     maxAllocationPct: 5, stopLossPct: 2, takeProfitPct: 4,
-    dailyLossLimitPct: 4, maxDrawdownPct: 10,
+    dailyLossLimitPct: 4, maxDrawdownPct: 10, minTradeUsd: 15,
     stopLossEnabled: true, takeProfitEnabled: true, trailingStopEnabled: true
   },
   Aggressive: {
     maxAllocationPct: 10, stopLossPct: 4, takeProfitPct: 8,
-    dailyLossLimitPct: 8, maxDrawdownPct: 18,
+    dailyLossLimitPct: 8, maxDrawdownPct: 18, minTradeUsd: 15,
     stopLossEnabled: true, takeProfitEnabled: true, trailingStopEnabled: true
   }
 }
