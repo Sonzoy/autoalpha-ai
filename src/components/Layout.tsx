@@ -3,7 +3,7 @@ import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import { useState } from 'react'
 import {
   LayoutDashboard, BrainCircuit, History, ShieldAlert, Radar, PieChart,
-  Link2, Settings2, LogOut, OctagonX, Activity, Sun, Moon
+  Link2, Settings2, LogOut, OctagonX, Sun, Moon
 } from 'lucide-react'
 import { Modal } from './ui'
 import { useStore } from '../store/store'
@@ -26,8 +26,6 @@ export default function Layout() {
   const setEmergencyStop = useStore(s => s.setEmergencyStop)
   const autoPaused = useStore(s => s.autoPaused)
   const killSwitch = useStore(s => s.killSwitch)
-  const speed = useStore(s => s.speed)
-  const setSpeed = useStore(s => s.setSpeed)
   const brokerConn = useStore(s => s.brokerConn)
   const logOut = useStore(s => s.logOut)
   const theme = useStore(s => s.theme)
@@ -78,15 +76,12 @@ export default function Layout() {
             <button className={tradingMode === 'paper' ? 'active' : ''} onClick={() => switchMode('paper')}>PAPER</button>
             <button className={tradingMode === 'live' ? 'active' : ''} style={tradingMode === 'live' ? { background: 'var(--red)' } : undefined} onClick={() => switchMode('live')}>LIVE</button>
           </div>
-          <Badge tone={regimeTone as any}>{regime}</Badge>
-          <Badge tone={paperOk ? 'green' : 'gray'}>{paperOk ? 'Broker OK' : 'Broker offline'}</Badge>
+          {/* Quiet by default — status badges appear only when something needs attention */}
+          {!paperOk && <Badge tone="red">Broker offline</Badge>}
           {killSwitch && <Badge tone="red">KILL SWITCH</Badge>}
           {autoPaused && <Badge tone="amber">RISK PAUSED</Badge>}
           {emergencyStop && <Badge tone="red">EMERGENCY STOP</Badge>}
-          <div className="row" title="Simulation speed">
-            <Activity size={14} color="var(--text-3)" />
-            <Segmented options={[1, 10, 60] as const} value={speed} onChange={v => setSpeed(v)} labels={v => `${v}x`} />
-          </div>
+          <Badge tone={regimeTone as any}>{regime}</Badge>
           <div className="row" title="AI auto-trading">
             <span className="small">AI</span>
             <Toggle on={autoTrading} disabled={emergencyStop || killSwitch} onChange={setAutoTrading} />
