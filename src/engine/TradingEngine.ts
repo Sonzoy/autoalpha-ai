@@ -94,6 +94,9 @@ async function tick(): Promise<void> {
     void MarketDataService.seedCryptoHistory().then(h => {
       if (sim && Object.keys(h).length) sim.applyLiveHistory(h)
     }).catch(() => {})
+    void MarketDataService.seedStockHistory(key).then(h => {
+      if (sim && Object.keys(h).length) sim.applyLiveHistory(h)
+    }).catch(() => {})
     void MarketDataService.fetchQuotes(key, feeds).then(quotes => {
       const s2 = useStore.getState()
       if (!s2.currentUser || !sim) return

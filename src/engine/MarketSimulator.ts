@@ -19,6 +19,7 @@ export class MarketSimulator {
   macroRisk = 35 // 0..100 global slow-moving risk factor
   liveSymbols = new Set<string>() // assets currently driven by live feeds (GBM skipped)
   private lastBarAt: Record<string, number> = {} // live assets: 5-minute time-bucketed bars
+  private seededSymbols = new Set<string>() // assets with real (not simulated) history
 
   static readonly LIVE_BAR_MS = 300_000 // 5 min — matches the seeded history granularity
   private sentiment: Record<string, SentimentState> = {}
@@ -49,6 +50,7 @@ export class MarketSimulator {
     for (const a of this.assets) {
       const h = histories[a.symbol]
       if (!h || h.length < 20) continue
+      this.seededSymbols.add(a.symbol)
       a.history = h.slice(-HISTORY_CAP)
       a.price = h[h.length - 1]
       a.prevPrice = h[h.length - 2] ?? a.price
@@ -69,7 +71,16 @@ export class MarketSimulator {
     for (const a of this.assets) {
       const q = quotes[a.symbol]
       if (!q) continue
-      this.liveSymbols.add(a.symbol)
+      if (!this.liveSymbols.has(a.symbol)) {
+        this.liveSymbols.add(a.symbol)
+        // First live quote and no real history seeded: purge simulated bars —
+        // fake volatility must never contaminate real-data scores. Scores
+        // rebuild honestly as live bars accumulate.
+        if (!this.seededSymbols.has(a.symbol)) {
+          a.history = [q.price]
+          this.lastBarAt[a.symbol] = now
+        }
+      }
       if (a.price !== q.price) {
         a.prevPrice = a.price
         a.price = q.price

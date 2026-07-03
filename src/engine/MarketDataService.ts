@@ -65,6 +65,30 @@ export const MarketDataService = {
     return out
   },
 
+  /**
+   * Seed real 5-min history for stocks/ETFs via Finnhub candles (free-tier
+   * availability varies; failures are silent and the simulator history is
+   * purged instead so scores build honestly from live bars).
+   */
+  async seedStockHistory(finnhubKey: string): Promise<Record<string, number[]>> {
+    const out: Record<string, number[]> = {}
+    if (!finnhubKey) return out
+    const to = Math.floor(Date.now() / 1000)
+    const from = to - 13 * 3600
+    await Promise.all(FINNHUB_SYMBOLS.map(async sym => {
+      if (seededHistory.has(sym)) return
+      const j = await getJson(`https://finnhub.io/api/v1/stock/candle?symbol=${sym}&resolution=5&from=${from}&to=${to}&token=${encodeURIComponent(finnhubKey)}`)
+      if (j?.s === 'ok' && Array.isArray(j.c) && j.c.length > 20) {
+        out[sym] = j.c.slice(-160)
+        seededHistory.add(sym)
+      }
+    }))
+    if (Object.keys(out).length) {
+      AuditLogger.info('MARKET', `Real price history seeded for ${Object.keys(out).join(', ')}`, 'Finnhub 5-minute candles.')
+    }
+    return out
+  },
+
   async fetchQuotes(finnhubKey: string, customFeeds: CustomFeed[] = []): Promise<Record<string, LiveQuote>> {
     const out: Record<string, LiveQuote> = {}
 
