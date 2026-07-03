@@ -29,6 +29,23 @@ let ticksSinceTrade = 99
 let busy = false
 let lastUser: string | null = null
 let lastLiveFetch = 0
+let connectingPaper = false
+
+/**
+ * Self-heal the paper venue connection. Persisted state can claim
+ * "connected" from a previous session while the in-memory adapter starts
+ * disconnected after a reload — the adapter is the source of truth.
+ */
+function ensurePaperConnected(): void {
+  if (connectingPaper || brokers.paper.status() !== 'disconnected') return
+  connectingPaper = true
+  void brokers.paper.connect().then(r => {
+    useStore.getState().setBrokerConn('paper', {
+      status: 'connected', message: r.message, permissions: r.permissions,
+      healthy: true, lastSync: Date.now()
+    })
+  }).catch(() => { /* retried next tick */ }).finally(() => { connectingPaper = false })
+}
 
 export function getSimulator(): MarketSimulator {
   // Per-user isolation: switching accounts discards the previous user's
@@ -51,6 +68,7 @@ export async function engineTick(): Promise<void> {
 async function tick(): Promise<void> {
   const st = useStore.getState()
   if (!st.currentUser || !st.profile.onboarded) return
+  ensurePaperConnected()
 
   // 1–2. Market data + sentiment update
   const simulator = getSimulator()

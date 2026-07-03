@@ -55,12 +55,13 @@ export default function App() {
     ;(brokers.etoro as any).configure(st.brokerConfig?.etoro ?? null)
   }, [currentUser])
 
-  // Ensure the paper venue is connected once the user is in the console
+  // Ensure the paper venue is connected once the user is in the console.
+  // Check the ADAPTER state, not persisted state — after a reload the
+  // persisted status can say "connected" while the adapter is not.
   useEffect(() => {
     if (mode !== 'local') return
     if (!currentUser || !onboarded) return
-    const st = useStore.getState()
-    if (st.brokerConn.paper.status !== 'connected') {
+    if (brokers.paper.status() === 'disconnected') {
       brokers.paper.connect().then(r => {
         useStore.getState().setBrokerConn('paper', {
           status: 'connected', message: r.message, permissions: r.permissions,
@@ -68,7 +69,7 @@ export default function App() {
         })
       })
     }
-  }, [currentUser, onboarded])
+  }, [currentUser, onboarded, mode])
 
   // Engine heartbeat — runs in a Web Worker so browsers don't throttle it
   // when the tab is in the background. The engine keeps trading as long as

@@ -85,8 +85,8 @@ export class MarketSimulator {
         // Sentiment evolves on bar closes for live assets, driven by real bar returns
         const s = this.sentiment[a.symbol]
         const barRet = prevBar ? (q.price - prevBar) / prevBar : 0
-        s.news = clamp(s.news * 0.96 + barRet * 3500 + rand(-3, 3) + (Math.random() < 0.02 ? rand(-25, 25) : 0), -95, 95)
-        s.social = clamp(s.social * 0.93 + s.news * 0.06 + barRet * 5000 + rand(-4, 4), -95, 95)
+        s.news = clamp(s.news * 0.96 + barRet * 1800 + rand(-3, 3) + (Math.random() < 0.02 ? rand(-25, 25) : 0), -95, 95)
+        s.social = clamp(s.social * 0.93 + s.news * 0.06 + barRet * 2200 + rand(-4, 4), -95, 95)
       }
       this.computeIntel(a)
     }
