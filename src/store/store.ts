@@ -119,7 +119,18 @@ function loadGlobal(): { users: StoredUser[]; currentUser: string | null } {
 function loadWorkspace(email: string): Workspace | null {
   try {
     const raw = storage?.getItem(WS_PREFIX + email)
-    if (raw) return { ...freshWorkspace(), ...JSON.parse(raw) }
+    if (raw) {
+      const parsed = JSON.parse(raw)
+      const fresh = freshWorkspace()
+      const ws: Workspace = { ...fresh, ...parsed }
+      // Nested records need deep-merging: workspaces saved by older builds
+      // lack keys added later (e.g. a new broker), and a shallow merge would
+      // let the stale object shadow the new defaults → runtime crashes.
+      ws.brokerConn = { ...fresh.brokerConn, ...(parsed.brokerConn ?? {}) }
+      ws.brokerConfig = { ...fresh.brokerConfig, ...(parsed.brokerConfig ?? {}) }
+      ws.marketKeys = { ...fresh.marketKeys, ...(parsed.marketKeys ?? {}) }
+      return ws
+    }
   } catch { /* corrupted workspace — fresh */ }
   return null
 }

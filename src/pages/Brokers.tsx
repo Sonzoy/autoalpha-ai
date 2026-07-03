@@ -90,7 +90,8 @@ export default function Brokers() {
 
   const card = (id: BrokerId, configForm?: React.ReactNode) => {
     const b = brokers[id]
-    const c = brokerConn[id]
+    // Defensive default: never crash on a workspace saved before this broker existed
+    const c = brokerConn[id] ?? { status: 'disconnected' as const, message: 'Not connected', lastSync: null, permissions: [], healthy: false }
     return (
       <div className="card" key={id}>
         <div className="row spread wrap">
@@ -215,7 +216,7 @@ export default function Brokers() {
         <p className="muted mb">{LIVE_LOCK_MESSAGE}</p>
         <div className="grid g2" style={{ gap: 8 }}>
           {[
-            { label: 'Real broker connected (IBKR, Binance, or eToro)', ok: brokerConn.ibkr.status === 'connected' || brokerConn.binance.status === 'connected' || brokerConn.etoro.status === 'connected' },
+            { label: 'Real broker connected (IBKR, Binance, or eToro)', ok: brokerConn.ibkr?.status === 'connected' || brokerConn.binance?.status === 'connected' || brokerConn.etoro?.status === 'connected' },
             { label: 'User authorization requested', ok: liveRequested },
             { label: 'Risk acknowledgement on file', ok: profile.riskAcknowledged },
             { label: 'Compliance review & admin approval', ok: adminApprovedLive }
@@ -230,7 +231,7 @@ export default function Brokers() {
           {!liveRequested && <button className="btn sm" onClick={requestLive}>Request live trading unlock</button>}
           {liveRequested && !adminApprovedLive && <Badge tone="amber">Pending admin approval (Admin Console)</Badge>}
           {liveRequested && adminApprovedLive && !liveUnlocked &&
-            <button className="btn success sm" disabled={brokerConn.ibkr.status !== 'connected' && brokerConn.binance.status !== 'connected' && brokerConn.etoro.status !== 'connected'}
+            <button className="btn success sm" disabled={brokerConn.ibkr?.status !== 'connected' && brokerConn.binance?.status !== 'connected' && brokerConn.etoro?.status !== 'connected'}
               onClick={() => setConfirmLive(true)}>Enable live trading</button>}
           {liveUnlocked && <button className="btn danger sm" onClick={() => { setLiveUnlocked(false); setFirstLiveOrderAuthorized(false) }}>Re-lock live trading</button>}
         </div>
