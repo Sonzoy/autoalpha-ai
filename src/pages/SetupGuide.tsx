@@ -1,5 +1,5 @@
 import React from 'react'
-import { BookOpen, Landmark, MonitorCog, Power, ShieldAlert, TerminalSquare } from 'lucide-react'
+import { BadgeDollarSign, BookOpen, Landmark, MonitorCog, Power, ShieldAlert, TerminalSquare } from 'lucide-react'
 
 function Code({ children }: { children: string }) {
   return <pre style={{
@@ -64,8 +64,38 @@ AUTH_TOKEN=pick-a-strong-secret npm run server`}</Code>
           considering real funds. Strategies are rules-based heuristics — losses are possible and no profit is guaranteed.</span></p>
       </div>
 
+      <div className="card" style={{ borderColor: 'var(--red)' }}>
+        <h3 style={{ color: 'var(--red)' }}><BadgeDollarSign size={13} style={{ verticalAlign: -2 }} /> Part 5 · Going live — real money</h3>
+        <p className="muted"><strong>Gate zero — do not skip:</strong> run against the IBKR <em>paper</em> account (Parts 2–4)
+          for at least several full trading days first. Verify that fills, stop-losses, take-profits, and the daily-loss
+          auto-pause all behave exactly as shown in the audit trail, and that positions in IBKR's portal match this app's
+          ledger. Only proceed when nothing surprises you.</p>
+        <p className="muted">1. <strong>IBKR live account ready.</strong> Fund your live account and enable trading permissions
+          for the asset classes you want (IBKR Client Portal → Settings → Trading Permissions — approvals can take a day or two).<br />
+          2. <strong>Log the gateway into your LIVE account.</strong> Same gateway, same URL — but sign in at
+          <span className="mono"> https://localhost:5000</span> with your live credentials instead of the paper ones.<br />
+          3. <strong>Update this app.</strong> Brokers → IBKR → Edit → change the Account ID from <span className="mono">DU…</span> to
+          your live <span className="mono">U…</span> account → Save → Connect. Confirm it reports an authenticated session.<br />
+          4. <strong>Re-arm the safety chain deliberately.</strong> If live trading was unlocked during paper testing, hit
+          <em> Re-lock live trading</em> first, then walk the full chain again — unlock request → admin approval → enable →
+          first-order pre-authorization — so switching to real money is a conscious decision, not inherited state.<br />
+          5. <strong>Shrink the risk settings before the first session.</strong> Risk Management → Conservative preset, then
+          lower max allocation further (1% or less) for the first days. You can always scale up; you can't un-lose money.<br />
+          6. <strong>Supervise the first session.</strong> Switch the top bar to LIVE and watch the first orders end-to-end:
+          proposal → risk checks → fill in the audit trail → the same fill in IBKR's own portal. Keep the emergency stop
+          within reach; it flattens everything at market.<br />
+          7. <strong>Ongoing discipline.</strong> Re-login to the gateway daily (orders are blocked while the session is
+          expired), review the audit trail regularly, and treat any mismatch between this app's ledger and IBKR's records
+          as a stop-everything event — IBKR's records are authoritative.</p>
+        <p className="small"><strong>Read before risking a cent:</strong> signal prices come from the app's market data feeds
+          (Binance stream, Finnhub, ECB) while orders execute at IBKR's prices — small mismatches and slippage are inherent,
+          which is another reason to size small. The strategies are rules-based heuristics without historical backtesting;
+          losses are possible, no profit is guaranteed, and past performance does not guarantee future results. Each person
+          must use their own broker account and make their own decision to go live. This software is not financial advice.</p>
+      </div>
+
       <div className="card">
-        <h3><Power size={13} style={{ verticalAlign: -2 }} /> Part 5 · Keep it running 24/7</h3>
+        <h3><Power size={13} style={{ verticalAlign: -2 }} /> Part 6 · Keep it running 24/7</h3>
         <Code>{`sudo npm i -g pm2
 NODE_TLS_REJECT_UNAUTHORIZED=0 AUTH_TOKEN=your-secret pm2 start "npm run server" --name autoalpha
 pm2 start "$HOME/ibkr-gateway/bin/run.sh" --name ibkr-gateway -- root/conf.yaml
