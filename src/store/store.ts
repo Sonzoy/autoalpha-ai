@@ -1,15 +1,38 @@
 import { create } from 'zustand'
-import { persist } from 'zustand/middleware'
 import type {
-  AssetState, AuditEvent, BrokerConnState, BrokerId, IntelSnapshot, PerfPoint,
-  Position, Regime, RiskSettings, SimSpeed, StrategyName, Trade, TradingMode, UserProfile
+  AssetState, AuditEvent, BrokerConnState, BrokerId, EtoroConfig, IbkrConfig, IntelSnapshot,
+  PerfPoint, Position, PriceSource, Regime, RiskSettings, SimSpeed, StrategyName, Trade,
+  TradingMode, UserProfile
 } from '../types'
 import { RISK_DEFAULTS } from '../types'
 import { AuditLogger } from '../engine/AuditLogger'
 
 export const START_CASH = 100_000
 
-interface StoredUser { name: string; email: string; password: string }
+// ---------------------------------------------------------------------------
+// Persistence model — per-user isolation:
+//   GLOBAL_KEY holds only the account directory (users + who is logged in).
+//   Each user's entire workspace (portfolio, trades, settings, broker config,
+//   audit log) lives under its own WS_PREFIX+email key and is only loaded
+//   into memory after that user authenticates. Logging out flushes and clears
+//   the in-memory workspace. NOTE: this is client-side isolation, gated by
+//   login — device-level attackers can read localStorage. Server-side auth is
+//   required for production-grade isolation.
+// ---------------------------------------------------------------------------
+const GLOBAL_KEY = 'autoalpha-global'
+const WS_PREFIX = 'autoalpha-ws:'
+const LEGACY_KEY = 'autoalpha-ai'
+
+const storage: Storage | null = typeof localStorage !== 'undefined' ? localStorage : null
+
+// Passwords are stored as salted SHA-256 hashes, never plaintext.
+interface StoredUser { name: string; email: string; passwordHash: string; password?: string }
+
+export async function hashPassword(password: string, email: string): Promise<string> {
+  const data = new TextEncoder().encode(`autoalpha:${email}:${password}`)
+  const digest = await crypto.subtle.digest('SHA-256', data)
+  return Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2, '0')).join('')
+}
 
 const emptyProfile: UserProfile = {
   name: '', email: '', experience: '', riskProfile: 'Balanced',
@@ -23,17 +46,8 @@ const initialBrokerConn = (): Record<BrokerId, BrokerConnState> => ({
   etoro: { status: 'disconnected', message: 'Not connected', lastSync: null, permissions: [], healthy: false }
 })
 
-export interface AppState {
-  // ---- auth ----
-  users: StoredUser[]
-  currentUser: string | null
+export interface Workspace {
   profile: UserProfile
-  signUp: (name: string, email: string, password: string) => string | null
-  logIn: (email: string, password: string) => string | null
-  logOut: () => void
-  saveProfile: (p: Partial<UserProfile>) => void
-
-  // ---- engine controls ----
   settings: RiskSettings
   autoTrading: boolean
   emergencyStop: boolean
@@ -43,6 +57,107 @@ export interface AppState {
   liveUnlocked: boolean
   liveRequested: boolean
   speed: SimSpeed
+  assets: AssetState[]
+  intel: Record<string, IntelSnapshot>
+  regime: Regime
+  engineMode: StrategyName
+  engineNote: string
+  lastConfidence: number
+  assetSources: Record<string, PriceSource>
+  cash: number
+  dayStartEquity: number
+  peakEquity: number
+  dayStamp: string
+  positions: Position[]
+  trades: Trade[]
+  perf: PerfPoint[]
+  audit: AuditEvent[]
+  brokerConn: Record<BrokerId, BrokerConnState>
+  brokerConfig: { ibkr: IbkrConfig | null; etoro: EtoroConfig | null }
+  marketKeys: { finnhub: string }
+  killSwitch: boolean
+  adminApprovedLive: boolean
+}
+
+export function freshWorkspace(): Workspace {
+  return {
+    profile: { ...emptyProfile },
+    settings: { ...RISK_DEFAULTS.Balanced },
+    autoTrading: false, emergencyStop: false, autoPaused: false, pauseReason: '',
+    tradingMode: 'paper', liveUnlocked: false, liveRequested: false, speed: 10,
+    assets: [], intel: {}, regime: 'Ranging',
+    engineMode: 'Cash / Risk-Off', engineNote: 'Engine idle.', lastConfidence: 0,
+    assetSources: {},
+    cash: START_CASH, dayStartEquity: START_CASH, peakEquity: START_CASH,
+    dayStamp: new Date().toDateString(), positions: [], trades: [], perf: [], audit: [],
+    brokerConn: initialBrokerConn(),
+    brokerConfig: { ibkr: null, etoro: null },
+    marketKeys: { finnhub: '' },
+    killSwitch: false, adminApprovedLive: false
+  }
+}
+
+const WS_FIELDS = Object.keys(freshWorkspace()) as (keyof Workspace)[]
+
+function loadGlobal(): { users: StoredUser[]; currentUser: string | null } {
+  try {
+    const raw = storage?.getItem(GLOBAL_KEY)
+    if (raw) return JSON.parse(raw)
+  } catch { /* corrupted — start fresh */ }
+  return migrateLegacy() ?? { users: [], currentUser: null }
+}
+
+function loadWorkspace(email: string): Workspace | null {
+  try {
+    const raw = storage?.getItem(WS_PREFIX + email)
+    if (raw) return { ...freshWorkspace(), ...JSON.parse(raw) }
+  } catch { /* corrupted workspace — fresh */ }
+  return null
+}
+
+/** One-time migration from the old single-blob storage format. */
+function migrateLegacy(): { users: StoredUser[]; currentUser: string | null } | null {
+  try {
+    const raw = storage?.getItem(LEGACY_KEY)
+    if (!raw) return null
+    const st = JSON.parse(raw)?.state
+    if (!st) return null
+    const users: StoredUser[] = (st.users ?? []).map((u: any) => ({
+      name: u.name, email: u.email, passwordHash: u.passwordHash ?? '', password: u.password
+    }))
+    const g = { users, currentUser: st.currentUser ?? null }
+    storage?.setItem(GLOBAL_KEY, JSON.stringify(g))
+    if (st.currentUser) {
+      const ws: any = { ...freshWorkspace() }
+      for (const f of WS_FIELDS) if (st[f] !== undefined) ws[f] = st[f]
+      storage?.setItem(WS_PREFIX + st.currentUser, JSON.stringify(ws))
+    }
+    storage?.removeItem(LEGACY_KEY)
+    return g
+  } catch { return null }
+}
+
+function persistNow(s: AppState): void {
+  if (!storage) return
+  try {
+    storage.setItem(GLOBAL_KEY, JSON.stringify({ users: s.users, currentUser: s.currentUser }))
+    if (s.currentUser) {
+      const ws: any = {}
+      for (const f of WS_FIELDS) ws[f] = s[f]
+      ws.audit = s.audit.slice(0, 300)
+      ws.perf = s.perf.slice(-600)
+      storage.setItem(WS_PREFIX + s.currentUser, JSON.stringify(ws))
+    }
+  } catch { /* storage full — non-fatal */ }
+}
+
+export interface AppState extends Workspace {
+  users: StoredUser[]
+  currentUser: string | null
+  signUp: (name: string, email: string, password: string) => Promise<string | null>
+  logIn: (email: string, password: string) => Promise<string | null>
+  logOut: () => void
+  saveProfile: (p: Partial<UserProfile>) => void
   updateSettings: (s: Partial<RiskSettings>) => void
   setAutoTrading: (v: boolean) => void
   setEmergencyStop: (v: boolean) => void
@@ -51,25 +166,9 @@ export interface AppState {
   setSpeed: (s: SimSpeed) => void
   requestLive: () => void
   setLiveUnlocked: (v: boolean) => void
-
-  // ---- market mirror (written by TradingEngine each tick) ----
-  assets: AssetState[]
-  intel: Record<string, IntelSnapshot>
-  regime: Regime
-  engineMode: StrategyName
-  engineNote: string
-  lastConfidence: number
   setMarket: (assets: AssetState[], intel: Record<string, IntelSnapshot>, regime: Regime) => void
   setEngineStatus: (mode: StrategyName, note: string, confidence: number) => void
-
-  // ---- portfolio ----
-  cash: number
-  dayStartEquity: number
-  peakEquity: number
-  dayStamp: string
-  positions: Position[]
-  trades: Trade[]
-  perf: PerfPoint[]
+  setAssetSources: (m: Record<string, PriceSource>) => void
   setCash: (v: number) => void
   rollDay: (equity: number) => void
   setPeak: (v: number) => void
@@ -79,152 +178,150 @@ export interface AppState {
   patchPosition: (tradeId: string, patch: Partial<Position>) => void
   removePosition: (tradeId: string) => void
   pushPerf: (p: PerfPoint) => void
-
-  // ---- audit ----
-  audit: AuditEvent[]
   addAudit: (e: AuditEvent) => void
-
-  // ---- brokers ----
-  brokerConn: Record<BrokerId, BrokerConnState>
   setBrokerConn: (id: BrokerId, patch: Partial<BrokerConnState>) => void
-
-  // ---- admin ----
-  killSwitch: boolean
-  adminApprovedLive: boolean
+  setBrokerConfig: (id: 'ibkr' | 'etoro', cfg: IbkrConfig | EtoroConfig | null) => void
+  setMarketKey: (provider: 'finnhub', key: string) => void
   setKillSwitch: (v: boolean) => void
   setAdminApprovedLive: (v: boolean) => void
-
   resetDemo: () => void
 }
 
-export const useStore = create<AppState>()(
-  persist(
-    (set, get) => ({
-      users: [],
-      currentUser: null,
-      profile: emptyProfile,
+const boot = loadGlobal()
+const bootWs = boot.currentUser ? (loadWorkspace(boot.currentUser) ?? freshWorkspace()) : freshWorkspace()
 
-      signUp: (name, email, password) => {
-        if (get().users.some(u => u.email === email)) return 'An account with this email already exists.'
-        if (password.length < 6) return 'Password must be at least 6 characters.'
-        set(s => ({ users: [...s.users, { name, email, password }], currentUser: email, profile: { ...emptyProfile, name, email } }))
-        AuditLogger.info('USER', `Account created: ${email}`)
-        return null
-      },
-      logIn: (email, password) => {
-        const u = get().users.find(x => x.email === email)
-        if (!u || u.password !== password) return 'Invalid email or password.'
-        set({ currentUser: email })
-        AuditLogger.info('USER', `Login: ${email}`)
-        return null
-      },
-      logOut: () => set({ currentUser: null }),
-      saveProfile: p => set(s => ({ profile: { ...s.profile, ...p } })),
+export const useStore = create<AppState>()((set, get) => ({
+  ...bootWs,
+  users: boot.users,
+  currentUser: boot.currentUser,
 
-      settings: RISK_DEFAULTS.Balanced,
-      autoTrading: false,
-      emergencyStop: false,
-      autoPaused: false,
-      pauseReason: '',
-      tradingMode: 'paper',
-      liveUnlocked: false,
-      liveRequested: false,
-      speed: 10,
-      updateSettings: p => {
-        set(s => ({ settings: { ...s.settings, ...p } }))
-        AuditLogger.info('USER', 'Risk settings updated', JSON.stringify(p))
-      },
-      setAutoTrading: v => {
-        set({ autoTrading: v })
-        AuditLogger.info('USER', v ? 'AI auto-trading enabled' : 'AI auto-trading disabled')
-      },
-      setEmergencyStop: v => {
-        set({ emergencyStop: v, autoTrading: v ? false : get().autoTrading })
-        AuditLogger[v ? 'warn' : 'info']('RISK', v ? 'EMERGENCY STOP engaged — all trading halted' : 'Emergency stop released')
-      },
-      pauseTrading: reason => {
-        set({ autoPaused: true, pauseReason: reason })
-        AuditLogger.warn('RISK', 'Auto-trading paused by risk engine', reason)
-      },
-      resumeTrading: () => {
-        set({ autoPaused: false, pauseReason: '' })
-        AuditLogger.info('USER', 'Auto-trading resumed by user after risk pause')
-      },
-      setSpeed: sp => set({ speed: sp }),
-      requestLive: () => {
-        set({ liveRequested: true })
-        AuditLogger.info('USER', 'Live trading unlock requested — pending compliance review and admin approval')
-      },
-      setLiveUnlocked: v => set({ liveUnlocked: v }),
+  signUp: async (name, email, password) => {
+    if (get().users.some(u => u.email === email)) return 'An account with this email already exists.'
+    if (password.length < 6) return 'Password must be at least 6 characters.'
+    const passwordHash = await hashPassword(password, email)
+    const prev = get()
+    if (prev.currentUser) persistNow(prev) // flush the outgoing user's workspace
+    set({
+      ...freshWorkspace(),
+      users: [...prev.users, { name, email, passwordHash }],
+      currentUser: email,
+      profile: { ...emptyProfile, name, email }
+    })
+    AuditLogger.info('USER', `Account created: ${email}`, 'Fresh isolated paper workspace initialized.')
+    persistNow(get())
+    return null
+  },
 
-      assets: [],
-      intel: {},
-      regime: 'Ranging',
-      engineMode: 'Cash / Risk-Off',
-      engineNote: 'Engine idle.',
-      lastConfidence: 0,
-      setMarket: (assets, intel, regime) => set({ assets, intel, regime }),
-      setEngineStatus: (mode, note, confidence) => set({ engineMode: mode, engineNote: note, lastConfidence: confidence }),
+  logIn: async (email, password) => {
+    const u = get().users.find(x => x.email === email)
+    if (!u) return 'Invalid email or password.'
+    const passwordHash = await hashPassword(password, email)
+    const legacyOk = !!u.password && u.password === password
+    if (u.passwordHash !== passwordHash && !legacyOk) return 'Invalid email or password.'
+    const prev = get()
+    if (prev.currentUser) persistNow(prev)
+    // Upgrade legacy plaintext accounts to hashed on first successful login
+    const users = legacyOk
+      ? prev.users.map(x => x.email === email ? { name: x.name, email: x.email, passwordHash } : x)
+      : prev.users
+    const ws = loadWorkspace(email) ?? freshWorkspace()
+    set({ ...ws, users, currentUser: email })
+    AuditLogger.info('USER', `Login: ${email}`, 'Workspace loaded. Auto-trading always starts disabled on login.')
+    // Safety: never resume auto-trading on login without explicit user action
+    set({ autoTrading: false })
+    persistNow(get())
+    return null
+  },
 
-      cash: START_CASH,
-      dayStartEquity: START_CASH,
-      peakEquity: START_CASH,
-      dayStamp: new Date().toDateString(),
-      positions: [],
-      trades: [],
-      perf: [],
-      setCash: v => set({ cash: v }),
-      rollDay: equity => set({ dayStamp: new Date().toDateString(), dayStartEquity: equity }),
-      setPeak: v => set({ peakEquity: v }),
-      addTrade: t => set(s => ({ trades: [t, ...s.trades].slice(0, 400) })),
-      patchTrade: (id, patch) => set(s => ({ trades: s.trades.map(t => t.id === id ? { ...t, ...patch } : t) })),
-      addPosition: p => set(s => ({ positions: [...s.positions, p] })),
-      patchPosition: (tradeId, patch) => set(s => ({ positions: s.positions.map(p => p.tradeId === tradeId ? { ...p, ...patch } : p) })),
-      removePosition: tradeId => set(s => ({ positions: s.positions.filter(p => p.tradeId !== tradeId) })),
-      pushPerf: p => set(s => ({ perf: [...s.perf, p].slice(-600) })),
+  logOut: () => {
+    const s = get()
+    if (s.currentUser) persistNow(s)
+    // Clear the in-memory workspace so nothing leaks to the login screen or next user
+    set({ ...freshWorkspace(), users: s.users, currentUser: null })
+  },
 
-      audit: [],
-      addAudit: e => set(s => ({ audit: [e, ...s.audit].slice(0, 800) })),
+  saveProfile: p => set(s => ({ profile: { ...s.profile, ...p } })),
 
-      brokerConn: initialBrokerConn(),
-      setBrokerConn: (id, patch) => set(s => ({ brokerConn: { ...s.brokerConn, [id]: { ...s.brokerConn[id], ...patch } } })),
+  updateSettings: p => {
+    set(s => ({ settings: { ...s.settings, ...p } }))
+    AuditLogger.info('USER', 'Risk settings updated', JSON.stringify(p))
+  },
+  setAutoTrading: v => {
+    set({ autoTrading: v })
+    AuditLogger.info('USER', v ? 'AI auto-trading enabled' : 'AI auto-trading disabled')
+  },
+  setEmergencyStop: v => {
+    set({ emergencyStop: v, autoTrading: v ? false : get().autoTrading })
+    AuditLogger[v ? 'warn' : 'info']('RISK', v ? 'EMERGENCY STOP engaged — all trading halted' : 'Emergency stop released')
+  },
+  pauseTrading: reason => {
+    set({ autoPaused: true, pauseReason: reason })
+    AuditLogger.warn('RISK', 'Auto-trading paused by risk engine', reason)
+  },
+  resumeTrading: () => {
+    set({ autoPaused: false, pauseReason: '' })
+    AuditLogger.info('USER', 'Auto-trading resumed by user after risk pause')
+  },
+  setSpeed: sp => set({ speed: sp }),
+  requestLive: () => {
+    set({ liveRequested: true })
+    AuditLogger.info('USER', 'Live trading unlock requested — pending compliance review and admin approval')
+  },
+  setLiveUnlocked: v => set({ liveUnlocked: v }),
 
-      killSwitch: false,
-      adminApprovedLive: false,
-      setKillSwitch: v => {
-        set({ killSwitch: v })
-        AuditLogger[v ? 'error' : 'info']('ADMIN', v ? 'PLATFORM KILL SWITCH ENGAGED — all automated trading halted' : 'Platform kill switch released')
-      },
-      setAdminApprovedLive: v => {
-        set({ adminApprovedLive: v })
-        AuditLogger.info('ADMIN', v ? 'Admin approved live trading request' : 'Admin revoked live trading approval')
-      },
+  setMarket: (assets, intel, regime) => set({ assets, intel, regime }),
+  setEngineStatus: (mode, note, confidence) => set({ engineMode: mode, engineNote: note, lastConfidence: confidence }),
+  setAssetSources: m => set({ assetSources: m }),
 
-      resetDemo: () => set({
-        cash: START_CASH, dayStartEquity: START_CASH, peakEquity: START_CASH,
-        dayStamp: new Date().toDateString(), positions: [], trades: [], perf: [], audit: [],
-        autoTrading: false, emergencyStop: false, autoPaused: false, pauseReason: '',
-        engineMode: 'Cash / Risk-Off', engineNote: 'Engine reset.', lastConfidence: 0
-      })
-    }),
-    {
-      name: 'autoalpha-ai',
-      partialize: s => ({
-        users: s.users, currentUser: s.currentUser, profile: s.profile,
-        settings: s.settings, autoTrading: s.autoTrading, emergencyStop: s.emergencyStop,
-        autoPaused: s.autoPaused, pauseReason: s.pauseReason, tradingMode: s.tradingMode,
-        liveUnlocked: s.liveUnlocked, liveRequested: s.liveRequested, speed: s.speed,
-        assets: s.assets, cash: s.cash, dayStartEquity: s.dayStartEquity, peakEquity: s.peakEquity,
-        dayStamp: s.dayStamp, positions: s.positions, trades: s.trades, perf: s.perf,
-        audit: s.audit.slice(0, 300), brokerConn: s.brokerConn,
-        killSwitch: s.killSwitch, adminApprovedLive: s.adminApprovedLive
-      })
-    }
-  )
-)
+  setCash: v => set({ cash: v }),
+  rollDay: equity => set({ dayStamp: new Date().toDateString(), dayStartEquity: equity }),
+  setPeak: v => set({ peakEquity: v }),
+  addTrade: t => set(s => ({ trades: [t, ...s.trades].slice(0, 400) })),
+  patchTrade: (id, patch) => set(s => ({ trades: s.trades.map(t => t.id === id ? { ...t, ...patch } : t) })),
+  addPosition: p => set(s => ({ positions: [...s.positions, p] })),
+  patchPosition: (tradeId, patch) => set(s => ({ positions: s.positions.map(p => p.tradeId === tradeId ? { ...p, ...patch } : p) })),
+  removePosition: tradeId => set(s => ({ positions: s.positions.filter(p => p.tradeId !== tradeId) })),
+  pushPerf: p => set(s => ({ perf: [...s.perf, p].slice(-600) })),
+
+  addAudit: e => set(s => ({ audit: [e, ...s.audit].slice(0, 800) })),
+
+  setBrokerConn: (id, patch) => set(s => ({ brokerConn: { ...s.brokerConn, [id]: { ...s.brokerConn[id], ...patch } } })),
+  setBrokerConfig: (id, cfg) => {
+    set(s => ({ brokerConfig: { ...s.brokerConfig, [id]: cfg } }))
+    AuditLogger.info('BROKER', `${id.toUpperCase()} API configuration ${cfg ? 'saved' : 'cleared'}`,
+      'Credentials are stored only in this browser (localStorage) and sent only to the broker\'s own API endpoint.')
+  },
+  setMarketKey: (provider, key) => {
+    set(s => ({ marketKeys: { ...s.marketKeys, [provider]: key } }))
+    AuditLogger.info('MARKET', `${provider} market-data key ${key ? 'saved' : 'cleared'} (stored locally)`)
+  },
+
+  setKillSwitch: v => {
+    set({ killSwitch: v })
+    AuditLogger[v ? 'error' : 'info']('ADMIN', v ? 'PLATFORM KILL SWITCH ENGAGED — all automated trading halted' : 'Platform kill switch released')
+  },
+  setAdminApprovedLive: v => {
+    set({ adminApprovedLive: v })
+    AuditLogger.info('ADMIN', v ? 'Admin approved live trading request' : 'Admin revoked live trading approval')
+  },
+
+  resetDemo: () => set({
+    cash: START_CASH, dayStartEquity: START_CASH, peakEquity: START_CASH,
+    dayStamp: new Date().toDateString(), positions: [], trades: [], perf: [], audit: [],
+    autoTrading: false, emergencyStop: false, autoPaused: false, pauseReason: '',
+    engineMode: 'Cash / Risk-Off', engineNote: 'Engine reset.', lastConfidence: 0
+  })
+}))
 
 // Route every AuditLogger event into the store
 AuditLogger.attach(e => useStore.getState().addAudit(e))
+
+// Throttled persistence: flush at most once per second
+let saveTimer: ReturnType<typeof setTimeout> | null = null
+useStore.subscribe(() => {
+  if (saveTimer) return
+  saveTimer = setTimeout(() => { saveTimer = null; persistNow(useStore.getState()) }, 1000)
+})
 
 // ---------- derived helpers ----------
 export function positionValue(p: Position, price: number): number {

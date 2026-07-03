@@ -17,8 +17,10 @@ export class MarketSimulator {
   assets: AssetState[] = []
   intel: Record<string, IntelSnapshot> = {}
   macroRisk = 35 // 0..100 global slow-moving risk factor
+  liveSymbols = new Set<string>() // assets currently driven by live feeds (GBM skipped)
   private sentiment: Record<string, SentimentState> = {}
   private driftBias: Record<string, number> = {} // slow-moving per-asset drift regime
+  private anchors: Record<string, number> = {} // long-run anchor to stop unrealistic drift
 
   constructor(seedAssets?: AssetState[]) {
     if (seedAssets && seedAssets.length) {
@@ -33,8 +35,27 @@ export class MarketSimulator {
     for (const a of this.assets) {
       this.sentiment[a.symbol] = { news: rand(-30, 30), social: rand(-30, 30) }
       this.driftBias[a.symbol] = rand(-1, 1)
+      this.anchors[a.symbol] = ASSET_UNIVERSE.find(d => d.symbol === a.symbol)?.basePrice ?? a.price
       a.history = a.history.length ? a.history : [a.price]
       this.computeIntel(a)
+    }
+  }
+
+  /** Apply real prices from live feeds. Live assets stop following GBM. */
+  applyLiveQuotes(quotes: Record<string, { price: number }>): void {
+    for (const a of this.assets) {
+      const q = quotes[a.symbol]
+      if (!q) continue
+      this.liveSymbols.add(a.symbol)
+      if (a.price !== q.price) {
+        a.prevPrice = a.price
+        a.price = q.price
+        a.history.push(q.price)
+        if (a.history.length > HISTORY_CAP) a.history.shift()
+        // First live quote after a simulated run can jump: reset day open
+        if (Math.abs(q.price - a.dayOpen) / a.dayOpen > 0.2) a.dayOpen = q.price
+        this.computeIntel(a)
+      }
     }
   }
 
@@ -57,11 +78,24 @@ export class MarketSimulator {
       5, 95
     )
     for (const a of this.assets) {
+      // Live-fed assets: prices come from real feeds via applyLiveQuotes;
+      // only sentiment/intel evolve here.
+      if (this.liveSymbols.has(a.symbol)) {
+        const sLive = this.sentiment[a.symbol]
+        const retLive = a.prevPrice ? (a.price - a.prevPrice) / a.prevPrice : 0
+        sLive.news = clamp(sLive.news * 0.97 + retLive * 400 + rand(-4, 4), -95, 95)
+        sLive.social = clamp(sLive.social * 0.94 + sLive.news * 0.05 + retLive * 600 + rand(-6, 6), -95, 95)
+        this.computeIntel(a)
+        continue
+      }
       // Slowly rotate drift regimes so trends form and break
       if (Math.random() < 0.02) this.driftBias[a.symbol] = rand(-1, 1)
       const s = this.sentiment[a.symbol]
       const riskDrag = this.macroRisk > 70 ? -0.4 : 0
-      const drift = this.driftBias[a.symbol] * 0.25 + s.news / 600 + riskDrag * 0.2
+      // Anchor term: gentle mean reversion toward base price prevents
+      // multi-hour drifts into implausible territory (e.g., gold at $1,400)
+      const anchorPull = Math.log(this.anchors[a.symbol] / a.price) * 1.2
+      const drift = this.driftBias[a.symbol] * 0.25 + s.news / 600 + riskDrag * 0.2 + anchorPull
       const volMult = 1 + this.macroRisk / 120 + (Math.random() < 0.03 ? 1.5 : 0)
       a.prevPrice = a.price
       a.price = gbmStep(a.price, a.vol * volMult, drift, 1)

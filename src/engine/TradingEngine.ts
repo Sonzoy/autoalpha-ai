@@ -6,7 +6,8 @@ import { PaperBrokerAdapter } from './brokers/PaperBrokerAdapter'
 import { IBKRBrokerAdapter } from './brokers/IBKRBrokerAdapter'
 import { EToroBrokerAdapter } from './brokers/EToroBrokerAdapter'
 import type { BrokerAdapter } from './brokers/BrokerAdapter'
-import type { BrokerId, Position, Trade } from '../types'
+import type { BrokerId, Position, PriceSource, Trade } from '../types'
+import { MarketDataService } from './MarketDataService'
 import { computeEquity, positionPnl, positionValue, useStore } from '../store/store'
 
 /**
@@ -25,8 +26,14 @@ export const brokers: Record<BrokerId, BrokerAdapter> = {
 let sim: MarketSimulator | null = null
 let ticksSinceTrade = 99
 let busy = false
+let lastUser: string | null = null
+let lastLiveFetch = 0
 
 export function getSimulator(): MarketSimulator {
+  // Per-user isolation: switching accounts discards the previous user's
+  // in-memory market state and reseeds from the new user's workspace.
+  const cur = useStore.getState().currentUser
+  if (cur !== lastUser) { sim = null; lastUser = cur; ticksSinceTrade = 99 }
   if (!sim) {
     const saved = useStore.getState().assets
     sim = new MarketSimulator(saved.length ? saved : undefined)
@@ -46,6 +53,21 @@ async function tick(): Promise<void> {
 
   // 1–2. Market data + sentiment update
   const simulator = getSimulator()
+  // Live feeds: refresh every 30s in the background (crypto: CoinGecko,
+  // FX: Frankfurter/ECB, stocks/ETFs: Finnhub with user key). Failures
+  // fall back silently to the simulator.
+  if (Date.now() - lastLiveFetch > 30_000) {
+    lastLiveFetch = Date.now()
+    const key = st.marketKeys?.finnhub ?? ''
+    void MarketDataService.fetchQuotes(key).then(quotes => {
+      const s2 = useStore.getState()
+      if (!s2.currentUser || !sim) return
+      sim.applyLiveQuotes(quotes)
+      const sources: Record<string, PriceSource> = {}
+      for (const a of sim.assets) sources[a.symbol] = quotes[a.symbol]?.source ?? 'simulated'
+      s2.setAssetSources(sources)
+    }).catch(() => { /* degraded to simulation */ })
+  }
   simulator.step()
   const assets = simulator.assets.map(a => ({ ...a, history: [...a.history] }))
   const intel = { ...simulator.intel }
@@ -119,6 +141,10 @@ async function tick(): Promise<void> {
   ticksSinceTrade++
   const s = useStore.getState()
   if (!s.autoTrading || s.autoPaused || s.emergencyStop || s.killSwitch) return
+  // Clear a stale "broker unhealthy" note once the link has recovered
+  if (brokers.paper.healthy() && s.engineNote.startsWith('Broker link unhealthy')) {
+    useStore.getState().setEngineStatus(s.engineMode, 'Broker link recovered — scanning for qualified setups.', s.lastConfidence)
+  }
   if (ticksSinceTrade < 5 || Math.random() > 0.45) return
   // Don't generate proposals while the broker link is unhealthy — wait for recovery
   if (!brokers.paper.healthy()) {

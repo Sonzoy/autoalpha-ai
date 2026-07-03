@@ -1,14 +1,18 @@
 import React, { useState } from 'react'
-import { Lock, RefreshCw, ShieldCheck } from 'lucide-react'
+import { KeyRound, Lock, RefreshCw, ShieldCheck } from 'lucide-react'
 import { useStore } from '../store/store'
 import { Badge, Modal, fmtTime, statusTone } from '../components/ui'
 import { brokers } from '../engine/TradingEngine'
 import { LIVE_LOCK_MESSAGE } from '../types'
 import type { BrokerId } from '../types'
+import { IBKRBrokerAdapter } from '../engine/brokers/IBKRBrokerAdapter'
+import { EToroBrokerAdapter } from '../engine/brokers/EToroBrokerAdapter'
 
 export default function Brokers() {
   const brokerConn = useStore(s => s.brokerConn)
   const setBrokerConn = useStore(s => s.setBrokerConn)
+  const brokerConfig = useStore(s => s.brokerConfig)
+  const setBrokerConfig = useStore(s => s.setBrokerConfig)
   const liveRequested = useStore(s => s.liveRequested)
   const liveUnlocked = useStore(s => s.liveUnlocked)
   const adminApprovedLive = useStore(s => s.adminApprovedLive)
@@ -17,6 +21,26 @@ export default function Brokers() {
   const profile = useStore(s => s.profile)
   const [busy, setBusy] = useState<BrokerId | null>(null)
   const [confirmLive, setConfirmLive] = useState(false)
+
+  // IBKR config form state
+  const [gatewayUrl, setGatewayUrl] = useState(brokerConfig.ibkr?.gatewayUrl ?? '')
+  const [accountId, setAccountId] = useState(brokerConfig.ibkr?.accountId ?? '')
+  // eToro config form state
+  const [etUser, setEtUser] = useState(brokerConfig.etoro?.username ?? '')
+  const [etKey, setEtKey] = useState(brokerConfig.etoro?.apiKey ?? '')
+
+  const saveIbkr = () => {
+    const cfg = gatewayUrl.trim() ? { gatewayUrl: gatewayUrl.trim(), accountId: accountId.trim() } : null
+    setBrokerConfig('ibkr', cfg)
+    ;(brokers.ibkr as IBKRBrokerAdapter).configure(cfg)
+    setBrokerConn('ibkr', { message: cfg ? 'Gateway configured — not yet connected.' : 'Configuration cleared.', status: 'disconnected', healthy: false })
+  }
+  const saveEtoro = () => {
+    const cfg = etKey.trim() && etUser.trim() ? { username: etUser.trim(), apiKey: etKey.trim() } : null
+    setBrokerConfig('etoro', cfg)
+    ;(brokers.etoro as EToroBrokerAdapter).configure(cfg)
+    setBrokerConn('etoro', { message: cfg ? 'API key saved locally — not yet connected.' : 'Configuration cleared.', status: 'disconnected', healthy: false })
+  }
 
   const connect = async (id: BrokerId) => {
     setBusy(id)
@@ -33,11 +57,11 @@ export default function Brokers() {
   const sync = async (id: BrokerId) => {
     setBusy(id)
     const r = await brokers[id].sync()
-    setBrokerConn(id, { message: r.message, lastSync: r.ok ? Date.now() : brokerConn[id].lastSync })
+    setBrokerConn(id, { message: r.message, lastSync: r.ok ? Date.now() : brokerConn[id].lastSync, healthy: brokers[id].healthy(), status: brokers[id].status() })
     setBusy(null)
   }
 
-  const card = (id: BrokerId, extra?: React.ReactNode) => {
+  const card = (id: BrokerId, configForm?: React.ReactNode) => {
     const b = brokers[id]
     const c = brokerConn[id]
     return (
@@ -50,6 +74,7 @@ export default function Brokers() {
         <div className="row wrap mb">
           {b.capabilities.map(cap => <span key={cap} className="badge gray" style={{ fontWeight: 500 }}>{cap}</span>)}
         </div>
+        {configForm}
         <p className="muted mb" style={{ fontSize: 12 }}>
           <strong>Status:</strong> {c.message}
           {c.permissions.length > 0 && <> · <strong>Permissions:</strong> {c.permissions.join(', ')}</>}
@@ -59,25 +84,55 @@ export default function Brokers() {
         <div className="row wrap">
           {c.status !== 'connected'
             ? <button className="btn primary sm" disabled={busy === id} onClick={() => connect(id)}>{busy === id ? 'Connecting…' : 'Connect'}</button>
-            : <button className="btn sm" disabled={busy === id} onClick={() => sync(id)}><RefreshCw size={13} /> Sync now</button>}
-          {extra}
+            : <>
+              <button className="btn sm" disabled={busy === id} onClick={() => sync(id)}><RefreshCw size={13} /> Sync now</button>
+              <button className="btn ghost sm" onClick={() => { brokers[id].disconnect(); setBrokerConn(id, { status: 'disconnected', message: 'Disconnected by user.', healthy: false }) }}>Disconnect</button>
+            </>}
         </div>
       </div>
     )
   }
 
+  const ibkrForm = (
+    <div className="mb" style={{ padding: 12, background: 'var(--bg-3)', borderRadius: 8 }}>
+      <div className="row" style={{ marginBottom: 8 }}><KeyRound size={13} color="var(--blue)" /><strong style={{ fontSize: 12.5 }}>API setup — Client Portal Gateway</strong></div>
+      <p className="small mb">Run IBKR's Client Portal Gateway on your machine, log in to it with your IBKR credentials (they never touch this app), then save its URL here. Stored only in this browser.</p>
+      <div className="field"><label>Gateway URL</label>
+        <input value={gatewayUrl} onChange={e => setGatewayUrl(e.target.value)} placeholder="https://localhost:5000/v1/api" /></div>
+      <div className="field"><label>Account ID (optional)</label>
+        <input value={accountId} onChange={e => setAccountId(e.target.value)} placeholder="U1234567" /></div>
+      <button className="btn sm" onClick={saveIbkr}>{brokerConfig.ibkr ? 'Update configuration' : 'Save configuration'}</button>
+      {brokerConfig.ibkr && <button className="btn ghost sm" style={{ marginLeft: 8 }} onClick={() => { setGatewayUrl(''); setAccountId(''); setBrokerConfig('ibkr', null); (brokers.ibkr as IBKRBrokerAdapter).configure(null) }}>Clear</button>}
+    </div>
+  )
+
+  const etoroForm = (
+    <div className="mb" style={{ padding: 12, background: 'var(--bg-3)', borderRadius: 8 }}>
+      <div className="row" style={{ marginBottom: 8 }}><KeyRound size={13} color="var(--blue)" /><strong style={{ fontSize: 12.5 }}>API setup — eToro API key</strong></div>
+      <p className="small mb">eToro grants API access on approval — request a key from eToro's developer portal. The key is stored only in this browser and sent only to api.etoro.com in a request header.</p>
+      <div className="field"><label>eToro username</label>
+        <input value={etUser} onChange={e => setEtUser(e.target.value)} placeholder="your-etoro-username" /></div>
+      <div className="field"><label>API key</label>
+        <input type="password" value={etKey} onChange={e => setEtKey(e.target.value)} placeholder="••••••••••••••••" autoComplete="off" /></div>
+      <button className="btn sm" onClick={saveEtoro}>{brokerConfig.etoro ? 'Update configuration' : 'Save configuration'}</button>
+      {brokerConfig.etoro && <button className="btn ghost sm" style={{ marginLeft: 8 }} onClick={() => { setEtUser(''); setEtKey(''); setBrokerConfig('etoro', null); (brokers.etoro as EToroBrokerAdapter).configure(null) }}>Clear</button>}
+    </div>
+  )
+
   return (
     <div className="grid" style={{ gap: 14 }}>
       <div className="card" style={{ borderColor: 'var(--blue)' }}>
-        <h3><ShieldCheck size={13} style={{ verticalAlign: -2 }} /> Non-custodial by design</h3>
-        <p className="muted">AutoAlpha AI never accepts deposits and never holds your money. Real funds stay inside your own
-          broker account (e.g., Interactive Brokers or eToro). The platform reads account data and transmits authorized
-          order instructions through official broker APIs — nothing more. Automated trading involves risk and losses are possible.</p>
+        <h3><ShieldCheck size={13} style={{ verticalAlign: -2 }} /> Non-custodial by design — credential security</h3>
+        <p className="muted">AutoAlpha AI never accepts deposits and never holds your money. Broker credentials are handled to the
+          same standard: your IBKR login stays inside IBKR's own gateway (this app only talks to the gateway you run);
+          your eToro API key is stored only in this browser and transmitted only to eToro over HTTPS. Nothing is sent to
+          any AutoAlpha server — there is none. For a production deployment, keys belong in a server-side vault; treat
+          this client-side build as suitable for read-only and paper use.</p>
       </div>
 
       {card('paper')}
-      {card('ibkr')}
-      {card('etoro')}
+      {card('ibkr', ibkrForm)}
+      {card('etoro', etoroForm)}
 
       <div className="card" style={{ borderColor: liveUnlocked ? 'var(--green)' : 'var(--amber)' }}>
         <div className="row spread wrap">
@@ -106,9 +161,9 @@ export default function Brokers() {
               onClick={() => setConfirmLive(true)}>Enable live trading</button>}
           {liveUnlocked && <button className="btn danger sm" onClick={() => setLiveUnlocked(false)}>Re-lock live trading</button>}
         </div>
-        <p className="small mt">Note: this build routes all execution to the paper venue regardless of unlock state, because
-          real broker credentials are not configured. A separate confirmation is required before the first live order once
-          real API access is wired in.</p>
+        <p className="small mt">Even when unlocked, this build does not transmit real orders: order routing code is
+          intentionally left unimplemented so that enabling real execution is a deliberate engineering step (see the
+          adapter source), not a toggle. A separate confirmation is required before the first live order.</p>
       </div>
 
       <Modal open={confirmLive} onClose={() => setConfirmLive(false)}>

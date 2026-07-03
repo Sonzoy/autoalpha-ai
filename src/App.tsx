@@ -21,6 +21,14 @@ export default function App() {
   const onboarded = useStore(s => s.profile.onboarded)
   const speed = useStore(s => s.speed)
 
+  // Hydrate broker adapters with this user's saved API configuration and
+  // reset connections when the account changes (per-user isolation)
+  useEffect(() => {
+    const st = useStore.getState()
+    ;(brokers.ibkr as any).configure(st.brokerConfig?.ibkr ?? null)
+    ;(brokers.etoro as any).configure(st.brokerConfig?.etoro ?? null)
+  }, [currentUser])
+
   // Ensure the paper venue is connected once the user is in the console
   useEffect(() => {
     if (!currentUser || !onboarded) return

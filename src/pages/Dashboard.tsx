@@ -44,11 +44,11 @@ export default function Dashboard() {
         <Stat label="Portfolio value" value={fmtUsd(equity, 0)} sub={`Cash ${fmtUsd(cash, 0)}`} />
         <Stat label="Daily P&L" value={fmtUsd(dailyPnl)} sub={fmtPct(dailyPct)} tone={dailyPnl >= 0 ? 'pos' : 'neg'} />
         <Stat label="Total return" value={fmtPct(totalPct)} sub={`vs ${fmtUsd(START_CASH, 0)} start`} tone={totalPct >= 0 ? 'pos' : 'neg'} />
-        <Stat label="Drawdown" value={fmtPct(drawdown)} sub={`Peak ${fmtUsd(peakEquity, 0)}`} tone={drawdown < -3 ? 'neg' : 'warn'} />
+        <Stat label="Drawdown" value={`${drawdown.toFixed(2)}%`} sub={`Peak ${fmtUsd(peakEquity, 0)}`} tone={drawdown < -3 ? 'neg' : 'warn'} />
       </div>
 
       <div className="grid g4">
-        <Stat label="Open positions" value={positions.length} sub={`${trades.filter(t => t.status === 'Filled').length} filled today`} />
+        <Stat label="Open positions" value={positions.length} sub={`${trades.filter(t => t.status === 'Filled').length} open fills`} />
         <Stat label="Win rate (closed)" value={closed.length ? `${winRate.toFixed(0)}%` : '—'} sub={`${wins}W / ${closed.length - wins}L of ${closed.length}`} tone={winRate >= 50 ? 'pos' : 'warn'} />
         <Stat label="Active strategy mode" value={<span style={{ fontSize: 15 }}>{engineMode}</span>} sub={autoTrading ? 'AI trading active' : 'AI trading off'} tone="info" />
         <Stat label="AI confidence" value={lastConfidence ? `${lastConfidence}` : '—'} sub={`Market regime: ${regime}`} tone="info" />

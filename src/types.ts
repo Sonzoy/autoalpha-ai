@@ -169,6 +169,18 @@ export interface BrokerConnState {
   healthy: boolean
 }
 
+export type PriceSource = 'coingecko' | 'frankfurter' | 'finnhub' | 'broker' | 'simulated'
+
+export interface IbkrConfig {
+  gatewayUrl: string // e.g. https://localhost:5000/v1/api (IBKR Client Portal Gateway)
+  accountId: string
+}
+
+export interface EtoroConfig {
+  username: string
+  apiKey: string
+}
+
 export const RISK_DEFAULTS: Record<RiskProfile, RiskSettings> = {
   Conservative: {
     maxAllocationPct: 2, stopLossPct: 1, takeProfitPct: 2,

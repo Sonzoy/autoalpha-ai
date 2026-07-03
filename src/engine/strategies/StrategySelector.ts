@@ -97,7 +97,9 @@ export const StrategySelector = {
     alloc = Math.max(0.5, alloc * volPenalty * macroPenalty)
     alloc = Math.min(alloc, ctx.settings.maxAllocationPct)
 
-    const confidence = Math.min(96, best.signal.score + Math.round((best.snap.liquidity - 50) / 12))
+    // Wider spread: scale score down and cap the liquidity bonus so values
+    // don't cluster in the 90s
+    const confidence = Math.max(50, Math.min(95, Math.round(best.signal.score * 0.9 + (best.snap.liquidity - 50) / 10)))
 
     return {
       mode: best.signal.strategy,

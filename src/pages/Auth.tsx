@@ -17,24 +17,25 @@ export default function Auth() {
   const signUp = useStore(s => s.signUp)
   const logIn = useStore(s => s.logIn)
 
-  const submit = (e: React.FormEvent) => {
-    e.preventDefault()
+  const submit = (e: React.FormEvent) => { e.preventDefault(); void handle() }
+
+  const handle = async () => {
     setErr(null); setMsg(null)
     if (view === 'signup') {
       if (!name.trim()) return setErr('Please enter your name.')
-      const r = signUp(name.trim(), email.trim().toLowerCase(), password)
+      const r = await signUp(name.trim(), email.trim().toLowerCase(), password)
       if (r) setErr(r)
     } else if (view === 'login') {
-      // 2FA placeholder step before completing login
+      // 2FA placeholder step before completing login (credentials verified at final step)
       const u = useStore.getState().users.find(x => x.email === email.trim().toLowerCase())
-      if (!u || u.password !== password) return setErr('Invalid email or password.')
+      if (!u) return setErr('Invalid email or password.')
       setPendingLogin({ email: email.trim().toLowerCase(), password })
       setView('2fa')
     } else if (view === '2fa') {
       if (code.trim().length !== 6) return setErr('Enter the 6-digit code (any 6 digits in this demo).')
       if (pendingLogin) {
-        const r = logIn(pendingLogin.email, pendingLogin.password)
-        if (r) setErr(r)
+        const r = await logIn(pendingLogin.email, pendingLogin.password)
+        if (r) { setErr(r); setView('login') }
       }
     } else if (view === 'forgot') {
       setMsg('If an account exists for that email, a reset link has been sent (demo placeholder — no email is actually sent).')
@@ -77,7 +78,9 @@ export default function Auth() {
           )}
           {(view === 'signup' || view === 'login') && (
             <div className="field"><label>Password</label>
-              <input type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="••••••••" required /></div>
+              <input type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="••••••••" required />
+              {view === 'signup' && <p className="small" style={{ marginTop: 5 }}>Demo build with browser-local accounts — don't reuse a password from a real account. Passwords are stored as salted hashes; your workspace is isolated per account.</p>}
+            </div>
           )}
           {view === '2fa' && (
             <div className="field"><label>Authentication code</label>
