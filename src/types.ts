@@ -169,7 +169,7 @@ export interface BrokerConnState {
   healthy: boolean
 }
 
-export type PriceSource = 'coingecko' | 'frankfurter' | 'finnhub' | 'broker' | 'custom' | 'simulated'
+export type PriceSource = 'binance' | 'coingecko' | 'frankfurter' | 'finnhub' | 'broker' | 'custom' | 'simulated'
 
 export type ThemeMode = 'dark' | 'light'
 

@@ -8,6 +8,7 @@ import { EToroBrokerAdapter } from './brokers/EToroBrokerAdapter'
 import type { BrokerAdapter } from './brokers/BrokerAdapter'
 import type { BrokerId, Position, PriceSource, Trade } from '../types'
 import { MarketDataService } from './MarketDataService'
+import { freshWsQuotes, startStream } from './LiveStream'
 import { computeEquity, positionPnl, positionValue, useStore } from '../store/store'
 
 /**
@@ -53,6 +54,18 @@ async function tick(): Promise<void> {
 
   // 1–2. Market data + sentiment update
   const simulator = getSimulator()
+  // Real-time layer: Binance WebSocket stream (sub-second crypto ticks).
+  // Applied every tick; REST polling below remains the fallback layer.
+  startStream()
+  const wsFresh = freshWsQuotes()
+  if (Object.keys(wsFresh).length) {
+    simulator.applyLiveQuotes(wsFresh)
+    const cur = useStore.getState().assetSources
+    let changed = false
+    const next = { ...cur }
+    for (const sym of Object.keys(wsFresh)) if (next[sym] !== 'binance') { next[sym] = 'binance'; changed = true }
+    if (changed) useStore.getState().setAssetSources(next)
+  }
   // Live feeds: refresh every 30s in the background (crypto: CoinGecko,
   // FX: Frankfurter/ECB, stocks/ETFs: Finnhub with user key). Failures
   // fall back silently to the simulator.
@@ -67,8 +80,12 @@ async function tick(): Promise<void> {
       const s2 = useStore.getState()
       if (!s2.currentUser || !sim) return
       sim.applyLiveQuotes(quotes)
+      const wsNow = freshWsQuotes()
       const sources: Record<string, PriceSource> = {}
-      for (const a of sim.assets) sources[a.symbol] = quotes[a.symbol]?.source ?? (sim.liveSymbols.has(a.symbol) ? 'coingecko' : 'simulated')
+      for (const a of sim.assets) {
+        sources[a.symbol] = wsNow[a.symbol] ? 'binance'
+          : quotes[a.symbol]?.source ?? (sim.liveSymbols.has(a.symbol) ? 'coingecko' : 'simulated')
+      }
       s2.setAssetSources(sources)
     }).catch(() => { /* degraded to simulation */ })
   }

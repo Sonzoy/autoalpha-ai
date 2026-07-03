@@ -5,6 +5,7 @@ import { Badge, Meter } from '../components/ui'
 import type { PriceSource } from '../types'
 
 const SOURCE_LABEL: Record<PriceSource, { label: string; tone: 'green' | 'blue' | 'gray' }> = {
+  binance: { label: 'REALTIME · Binance stream', tone: 'green' },
   coingecko: { label: 'LIVE · CoinGecko', tone: 'green' },
   frankfurter: { label: 'LIVE · ECB', tone: 'green' },
   finnhub: { label: 'LIVE · Finnhub', tone: 'green' },
