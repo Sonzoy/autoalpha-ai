@@ -61,7 +61,7 @@ export const RiskManager = {
     // 6. Correlated overexposure: cap combined exposure to a single market
     const samePositions = ctx.positions.filter(x => x.market === p.market)
     const sameMarketAlloc = samePositions.reduce((a, x) => a + (x.qty * x.entryPrice / Math.max(ctx.equity, 1)) * 100, 0)
-    const corrOk = sameMarketAlloc + p.allocationPct <= MARKET_EXPOSURE_CAP_PCT
+    const corrOk = sameMarketAlloc + p.allocationPct <= MARKET_EXPOSURE_CAP_PCT + 1e-6
     add('Correlated exposure', corrOk,
       `${p.market} exposure would be ${(sameMarketAlloc + p.allocationPct).toFixed(1)}% vs ${MARKET_EXPOSURE_CAP_PCT}% cap (${samePositions.length} open correlated position(s)).`)
 
