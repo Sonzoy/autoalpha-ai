@@ -97,9 +97,9 @@ export default function Layout() {
 
         <Modal open={liveBlocked} onClose={() => setLiveBlocked(false)}>
           <h2>Live trading is locked</h2>
-          <p>Switching to live mode requires the full authorization chain: a connected real broker (IBKR gateway),
-            a live-trading unlock request, compliance review with admin approval, and your explicit enablement —
-            all on the Brokers page. This protects you from accidentally routing real orders.</p>
+          <p>Switching to live mode requires the full authorization chain: a connected real broker (IBKR gateway or
+            Binance), a live-trading unlock request, compliance review with admin approval, and your explicit
+            enablement — all on the Brokers page. This protects you from accidentally routing real orders.</p>
           <div className="row spread mt">
             <button className="btn" onClick={() => setLiveBlocked(false)}>Close</button>
             <a className="btn primary" href="#/brokers" onClick={() => setLiveBlocked(false)}>Open Brokers page</a>
