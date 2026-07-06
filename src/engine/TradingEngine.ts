@@ -208,14 +208,29 @@ async function tick(): Promise<void> {
     if (!price) continue
     const s = useStore.getState()
 
-    // trailing stop ratchet
+    // NEVER manage a REAL broker position on simulated prices — e.g. right
+    // after a restart, before live feeds arrive, the simulator's phantom
+    // ticks must not trigger real market SELLs at the broker. (This exact
+    // gap closed 5 live positions near breakeven after restarts.)
+    const posTrade = s.trades.find(t => t.id === p.tradeId)
+    const isRealPosition = !!posTrade && posTrade.broker !== 'paper'
+    if (isRealPosition && (s.assetSources[p.symbol] ?? 'simulated') === 'simulated') continue
+
+    // trailing stop ratchet — armed only once the position is in profit by
+    // half the stop distance, so breakeven noise can't shake positions out
+    // minutes after entry
     if (s.settings.trailingStopEnabled) {
-      const trail = p.direction === 'Long'
-        ? price * (1 - s.settings.stopLossPct / 100)
-        : price * (1 + s.settings.stopLossPct / 100)
-      const better = p.trailingStop === undefined ||
-        (p.direction === 'Long' ? trail > p.trailingStop : trail < p.trailingStop)
-      if (better) useStore.getState().patchPosition(p.tradeId, { trailingStop: trail })
+      const armed = p.direction === 'Long'
+        ? price >= p.entryPrice * (1 + s.settings.stopLossPct / 200)
+        : price <= p.entryPrice * (1 - s.settings.stopLossPct / 200)
+      if (armed) {
+        const trail = p.direction === 'Long'
+          ? price * (1 - s.settings.stopLossPct / 100)
+          : price * (1 + s.settings.stopLossPct / 100)
+        const better = p.trailingStop === undefined ||
+          (p.direction === 'Long' ? trail > p.trailingStop : trail < p.trailingStop)
+        if (better) useStore.getState().patchPosition(p.tradeId, { trailingStop: trail })
+      }
     }
 
     const pos = useStore.getState().positions.find(x => x.tradeId === p.tradeId)!
@@ -490,6 +505,7 @@ async function closePosition(p: Position, price: number, reason: string): Promis
   // Live positions must be closed at the broker with a REAL opposite order —
   // ledger bookkeeping alone would leave the actual position open.
   const trade = useStore.getState().trades.find(t => t.id === p.tradeId)
+  let liveCommission: number | null = null
   if (trade && trade.broker !== 'paper') {
     const adapter = brokers[trade.broker]
     const closeReq = {
@@ -506,10 +522,17 @@ async function closePosition(p: Position, price: number, reason: string): Promis
       return // do not touch the ledger — retry on the next tick
     }
     price = result.fillPrice
+    liveCommission = 'commission' in result && typeof result.commission === 'number' ? result.commission : null
   }
   const pnl = positionPnl(p, price)
   const proceeds = positionValue(p, price)
-  const commission = Math.max(1, proceeds * 0.0005)
+  // Commission honesty: LIVE trades record the broker's ACTUAL fee (Binance
+  // ~0.1%). The old max($1, …) floor was a paper-account assumption that
+  // turned every small live win into a fake ~$1 loss. Paper keeps a floor
+  // sized to its $100k ledger.
+  const commission = trade && trade.broker !== 'paper'
+    ? (liveCommission ?? proceeds * 0.001)
+    : Math.max(1, proceeds * 0.0005)
   // Paper ledger only — live proceeds land in the real broker account, which
   // the 60s portfolio sync reflects. See the fill path for the same guard.
   if (!trade || trade.broker === 'paper') useStore.getState().setCash(useStore.getState().cash + proceeds - commission)
