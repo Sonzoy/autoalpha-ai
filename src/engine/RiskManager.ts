@@ -21,7 +21,10 @@ export interface RiskContext {
   autoPaused: boolean
 }
 
-export const MARKET_EXPOSURE_CAP_PCT = 30 // max combined allocation to one market (correlated assets) — allows 2-3 concurrent crypto positions at ~10% each
+// Max combined allocation to one market. 100 = no cap: the user explicitly
+// dedicated this account to crypto and accepts full correlated deployment.
+// Per-trade allocation caps, stops, daily-loss and drawdown guards remain.
+export const MARKET_EXPOSURE_CAP_PCT = 100
 const MAX_OPEN_POSITIONS = 8
 
 export const RiskManager = {

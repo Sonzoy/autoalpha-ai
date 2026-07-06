@@ -64,15 +64,24 @@ export const StrategySelector = {
       const sent = snap.newsSentiment * 0.6 + snap.socialSentiment * 0.4
       if (Math.abs(sent) > 55 && Math.abs(snap.trend) > 55 && Math.sign(sent) !== Math.sign(snap.trend)) continue
 
-      // Route by regime; asset class influences which strategies are tried
+      // Route by regime AND asset character. Fast movers (high base
+      // volatility: DOGE, AVAX, SOL...) break ranges violently, so fading
+      // them mean-reversion style is a losing bet — they only trade with
+      // momentum confirmation. Slow majors (BTC) are where range-fading and
+      // volatility mean-reversion actually work.
+      const fastMover = asset.vol >= 0.8
       const candidates = []
       switch (snap.regime) {
         case 'Trending':
           candidates.push(TrendFollowingStrategy, SentimentMomentumStrategy); break
         case 'Ranging':
-          candidates.push(MeanReversionStrategy, SentimentMomentumStrategy); break
+          if (fastMover) candidates.push(SentimentMomentumStrategy, TrendFollowingStrategy)
+          else candidates.push(MeanReversionStrategy, SentimentMomentumStrategy)
+          break
         case 'Volatile':
-          candidates.push(DefensiveRiskOffStrategy, MeanReversionStrategy); break
+          if (fastMover) candidates.push(DefensiveRiskOffStrategy, SentimentMomentumStrategy)
+          else candidates.push(DefensiveRiskOffStrategy, MeanReversionStrategy)
+          break
         case 'Risk-Off':
           candidates.push(DefensiveRiskOffStrategy); break
       }
@@ -113,9 +122,16 @@ export const StrategySelector = {
     // don't cluster in the 90s
     const confidence = Math.max(50, Math.min(95, Math.round(best.signal.score * 0.9 + (best.snap.liquidity - 50) / 10)))
 
+    // Movement-scaled exits: a 2% stop is noise on DOGE and generous on BTC.
+    // Scale the user's stop/target by CURRENT measured volatility so each
+    // coin's exit distances match how far it actually moves. R:R preserved.
+    const volFactor = Math.min(2, Math.max(0.75, best.snap.volatility / 50))
+    const stopLossPct = Math.round(ctx.settings.stopLossPct * volFactor * 10) / 10
+    const takeProfitPct = Math.round(ctx.settings.takeProfitPct * volFactor * 10) / 10
+
     return {
       mode: best.signal.strategy,
-      note: `Selected ${best.signal.strategy} on ${best.asset.symbol} (regime: ${best.snap.regime}).`,
+      note: `Selected ${best.signal.strategy} on ${best.asset.symbol} (regime: ${best.snap.regime}, ${best.asset.vol >= 0.8 ? 'fast-mover' : 'major'} profile${volFactor !== 1 ? `, exits scaled ×${volFactor.toFixed(2)} for measured volatility` : ''}).`,
       proposal: {
         symbol: best.asset.symbol,
         market: best.asset.market,
@@ -123,8 +139,8 @@ export const StrategySelector = {
         strategy: best.signal.strategy,
         confidence,
         allocationPct: Math.round(alloc * 10) / 10,
-        stopLossPct: ctx.settings.stopLossPct,
-        takeProfitPct: ctx.settings.takeProfitPct,
+        stopLossPct,
+        takeProfitPct,
         rationale: best.signal.rationale +
           (volPenalty < 1 ? ` Allocation reduced ${Math.round((1 - volPenalty) * 100)}% for elevated volatility.` : '') +
           (macroPenalty < 1 ? ` Allocation reduced ${Math.round((1 - macroPenalty) * 100)}% for macro risk.` : ''),

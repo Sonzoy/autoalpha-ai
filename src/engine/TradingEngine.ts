@@ -385,6 +385,22 @@ async function tick(): Promise<void> {
     }
   }
 
+  // Liquidity gate (live): a fully deployed account has ~no free stablecoin
+  // left — new buys would only bounce off the broker with "insufficient USDT".
+  // Routine state, not an error: engine status, no Rejected record.
+  if (s.tradingMode === 'live' && s.brokerPortfolio) {
+    const STABLE_SET = ['USDT', 'USDC', 'FDUSD', 'BUSD', 'DAI', 'TUSD']
+    const freeStable = s.brokerPortfolio.balances
+      .filter(b => STABLE_SET.includes(b.asset)).reduce((a, b) => a + (b.usd ?? 0), 0)
+    const plannedValue = equity * prop.allocationPct / 100
+    if (plannedValue > freeStable * 0.98) {
+      useStore.getState().setEngineStatus(prop.strategy,
+        `Fully deployed: ${freeStable.toFixed(2)} USDT free vs ~${plannedValue.toFixed(2)} needed for the next order (${prop.symbol}). Waiting for a position to close.`,
+        prop.confidence)
+      return
+    }
+  }
+
   AuditLogger.info('STRATEGY', `Proposal: ${prop.direction} ${prop.symbol} via ${prop.strategy} (confidence ${prop.confidence})`, prop.rationale)
   const decision = RiskManager.check(prop, riskCtx(equity))
   const stopLoss = prop.direction === 'Long' ? price * (1 - prop.stopLossPct / 100) : price * (1 + prop.stopLossPct / 100)

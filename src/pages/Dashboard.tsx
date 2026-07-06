@@ -90,8 +90,10 @@ export default function Dashboard() {
                   </linearGradient>
                 </defs>
                 <XAxis dataKey="t" hide />
-                <YAxis domain={['auto', 'auto']} width={64} tick={{ fill: '#63718a', fontSize: 10.5 }} tickFormatter={v => '$' + Number(v).toLocaleString()} axisLine={false} tickLine={false} />
-                <Tooltip contentStyle={{ background: '#1c232d', border: '1px solid #263140', borderRadius: 10, fontSize: 12 }} />
+                <YAxis domain={['auto', 'auto']} width={64} tick={{ fill: 'var(--text-2)', fontSize: 11.5 }} tickFormatter={v => '$' + Number(v).toLocaleString()} axisLine={false} tickLine={false} />
+                <Tooltip
+                  contentStyle={{ background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 10, fontSize: 12.5, color: 'var(--text)' }}
+                  labelStyle={{ color: 'var(--text-2)' }} itemStyle={{ color: 'var(--text)' }} />
                 <Area type="monotone" dataKey="equity" stroke="var(--blue)" fill="url(#eq)" strokeWidth={2.2} dot={false} isAnimationActive={false} />
               </AreaChart>
             </ResponsiveContainer>

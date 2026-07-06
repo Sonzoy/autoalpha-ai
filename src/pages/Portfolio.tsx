@@ -4,7 +4,15 @@ import { useStore, computeEquity, positionPnl, positionValue } from '../store/st
 import { Badge, fmtTime, fmtUsd } from '../components/ui'
 import type { Market } from '../types'
 
-const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ef4444', '#14b8a6', '#eab308']
+const COLORS = ['#4d8dff', '#26d4f2', '#8b5cf6', '#10d99a', '#f5a623', '#f4506a', '#14b8a6', '#eab308']
+
+/** Readable pie labels: theme-aware text instead of recharts' defaults. */
+const pieLabel = (p: any) => (
+  <text x={p.x} y={p.y} fill="var(--text-2)" fontSize={11.5} fontWeight={600}
+    textAnchor={p.textAnchor} dominantBaseline="central">
+    {`${p.name} ${(p.percent * 100).toFixed(0)}%`}
+  </text>
+)
 
 export default function Portfolio() {
   const cash = useStore(s => s.cash)
@@ -41,7 +49,8 @@ export default function Portfolio() {
   const chart = perf.slice(-240).map(p => ({ t: fmtTime(p.ts), equity: Math.round(p.equity), dd: p.drawdown }))
   const syncs = audit.filter(e => e.category === 'BROKER').slice(0, 10)
 
-  const tooltipStyle = { background: '#1c232d', border: '1px solid #263140', borderRadius: 8, fontSize: 12 }
+  const tooltipStyle = { background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 8, fontSize: 12.5, color: 'var(--text)' }
+  const tooltipText = { labelStyle: { color: 'var(--text-2)' }, itemStyle: { color: 'var(--text)' } }
 
   return (
     <div className="grid" style={{ gap: 14 }}>
@@ -60,10 +69,11 @@ export default function Portfolio() {
           <div style={{ height: 210 }}>
             <ResponsiveContainer>
               <PieChart>
-                <Pie data={byAsset} dataKey="value" nameKey="name" innerRadius={55} outerRadius={85} paddingAngle={2}>
+                <Pie data={byAsset} dataKey="value" nameKey="name" innerRadius={48} outerRadius={72} paddingAngle={2}
+                  label={pieLabel} labelLine={{ stroke: 'var(--border)' }}>
                   {byAsset.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} stroke="none" />)}
                 </Pie>
-                <Tooltip contentStyle={tooltipStyle} formatter={(v: any) => fmtUsd(Number(v), 0)} />
+                <Tooltip contentStyle={tooltipStyle} {...tooltipText} formatter={(v: any) => fmtUsd(Number(v), 0)} />
               </PieChart>
             </ResponsiveContainer>
           </div>
@@ -78,10 +88,11 @@ export default function Portfolio() {
           <div style={{ height: 210 }}>
             <ResponsiveContainer>
               <PieChart>
-                <Pie data={marketData} dataKey="value" nameKey="name" innerRadius={55} outerRadius={85} paddingAngle={2}>
+                <Pie data={marketData} dataKey="value" nameKey="name" innerRadius={48} outerRadius={72} paddingAngle={2}
+                  label={pieLabel} labelLine={{ stroke: 'var(--border)' }}>
                   {marketData.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} stroke="none" />)}
                 </Pie>
-                <Tooltip contentStyle={tooltipStyle} formatter={(v: any) => fmtUsd(Number(v), 0)} />
+                <Tooltip contentStyle={tooltipStyle} {...tooltipText} formatter={(v: any) => fmtUsd(Number(v), 0)} />
               </PieChart>
             </ResponsiveContainer>
           </div>
@@ -102,8 +113,8 @@ export default function Portfolio() {
                 <defs><linearGradient id="pf" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="0%" stopColor="var(--green)" stopOpacity={0.3} /><stop offset="100%" stopColor="var(--green)" stopOpacity={0} />
                 </linearGradient></defs>
-                <XAxis dataKey="t" hide /><YAxis domain={['auto', 'auto']} width={70} tick={{ fill: '#63718a', fontSize: 11 }} tickFormatter={v => '$' + Number(v).toLocaleString()} />
-                <Tooltip contentStyle={tooltipStyle} />
+                <XAxis dataKey="t" hide /><YAxis domain={['auto', 'auto']} width={70} tick={{ fill: 'var(--text-2)', fontSize: 11.5 }} tickFormatter={v => '$' + Number(v).toLocaleString()} />
+                <Tooltip contentStyle={tooltipStyle} {...tooltipText} />
                 <Area type="monotone" dataKey="equity" stroke="var(--green)" fill="url(#pf)" strokeWidth={2} dot={false} isAnimationActive={false} />
               </AreaChart>
             </ResponsiveContainer>
@@ -117,8 +128,8 @@ export default function Portfolio() {
                 <defs><linearGradient id="dd" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="0%" stopColor="var(--red)" stopOpacity={0} /><stop offset="100%" stopColor="var(--red)" stopOpacity={0.35} />
                 </linearGradient></defs>
-                <XAxis dataKey="t" hide /><YAxis domain={['auto', 0]} width={50} tick={{ fill: '#63718a', fontSize: 11 }} tickFormatter={v => `${v}%`} />
-                <Tooltip contentStyle={tooltipStyle} formatter={(v: any) => `${v}%`} />
+                <XAxis dataKey="t" hide /><YAxis domain={['auto', 0]} width={50} tick={{ fill: 'var(--text-2)', fontSize: 11.5 }} tickFormatter={v => `${v}%`} />
+                <Tooltip contentStyle={tooltipStyle} {...tooltipText} formatter={(v: any) => `${v}%`} />
                 <Area type="monotone" dataKey="dd" stroke="var(--red)" fill="url(#dd)" strokeWidth={2} dot={false} isAnimationActive={false} />
               </AreaChart>
             </ResponsiveContainer>
