@@ -20,6 +20,20 @@ for (const key of Object.keys(store)) {
   const st = ws.state ?? ws
   if (st.autoPaused) { st.autoPaused = false; st.pauseReason = ''; touched++ }
   if ((st.settings?.maxAllocationPct ?? 0) < 10) { st.settings.maxAllocationPct = 10; touched++ }
+  // Prune redundant "Correlated exposure" rejection spam (engine now gates
+  // these before creating a record) — keep the first occurrence per symbol.
+  if (Array.isArray(st.trades)) {
+    const seen = new Set()
+    const before = st.trades.length
+    st.trades = st.trades.filter(t => {
+      const isSpam = t.status === 'Rejected' && /Correlated exposure/.test(t.closeReason ?? '')
+      if (!isSpam) return true
+      if (seen.has(t.symbol)) return false
+      seen.add(t.symbol)
+      return true
+    })
+    if (st.trades.length !== before) { console.log(`Pruned ${before - st.trades.length} redundant rejection records.`); touched++ }
+  }
   store[key] = JSON.stringify(ws)
 }
 writeFileSync(file, JSON.stringify(store))

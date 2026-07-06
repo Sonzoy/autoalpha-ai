@@ -1,6 +1,6 @@
 import { MarketSimulator } from './MarketSimulator'
 import { StrategySelector } from './strategies/StrategySelector'
-import { RiskManager, type RiskContext } from './RiskManager'
+import { MARKET_EXPOSURE_CAP_PCT, RiskManager, type RiskContext } from './RiskManager'
 import { AuditLogger } from './AuditLogger'
 import { PaperBrokerAdapter } from './brokers/PaperBrokerAdapter'
 import { IBKRBrokerAdapter } from './brokers/IBKRBrokerAdapter'
@@ -368,6 +368,21 @@ async function tick(): Promise<void> {
       `Best setup (${prop.symbol}) sizes to ${orderValue.toFixed(2)} USD — below your ${minTrade} USD minimum trade size. Raise max allocation % (Risk Management) or add funds. Holding.`,
       prop.confidence)
     return
+  }
+
+  // Portfolio-capacity gate: when the target market is already at its
+  // correlated-exposure cap, no new proposal there can pass risk. That's a
+  // routine "portfolio full" state — surface it as engine status instead of
+  // persisting an identical Rejected record every few seconds (log spam).
+  {
+    const sameMkt = useStore.getState().positions.filter(x => x.market === prop.market)
+    const mktAllocPct = sameMkt.reduce((a, x) => a + (x.qty * x.entryPrice / Math.max(equity, 1)) * 100, 0)
+    if (mktAllocPct + prop.allocationPct > MARKET_EXPOSURE_CAP_PCT + 1e-6) {
+      useStore.getState().setEngineStatus(prop.strategy,
+        `${prop.market} at capacity: ${mktAllocPct.toFixed(1)}% deployed across ${sameMkt.length} position(s) vs ${MARKET_EXPOSURE_CAP_PCT}% cap. Best setup (${prop.symbol}) waits for a position to close.`,
+        prop.confidence)
+      return
+    }
   }
 
   AuditLogger.info('STRATEGY', `Proposal: ${prop.direction} ${prop.symbol} via ${prop.strategy} (confidence ${prop.confidence})`, prop.rationale)
