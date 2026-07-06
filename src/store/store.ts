@@ -356,7 +356,9 @@ export const useStore = create<AppState>()((set, get) => ({
     const basis = m === 'live' && s.brokerPortfolio && s.brokerPortfolio.totalUsd > 0
       ? s.brokerPortfolio.totalUsd
       : computeEquity({ cash: s.cash, positions: s.positions, assets: s.assets })
-    set({ tradingMode: m, dayStartEquity: basis, peakEquity: basis, dayStamp: new Date().toDateString() })
+    // Rebasing invalidates any pause computed against the OLD baselines —
+    // clear it so a phantom breach can't outlive the basis switch.
+    set({ tradingMode: m, dayStartEquity: basis, peakEquity: basis, dayStamp: new Date().toDateString(), autoPaused: false, pauseReason: '' })
     AuditLogger[m === 'live' ? 'warn' : 'info']('USER',
       m === 'live' ? 'Trading mode switched to LIVE' : 'Trading mode switched to PAPER',
       `Risk baselines rebased to ${basis.toFixed(2)} USD (${m === 'live' ? 'real account' : 'paper ledger'}).`)
@@ -402,4 +404,29 @@ export function positionPnl(p: Position, price: number): number {
 export function computeEquity(s: Pick<AppState, 'cash' | 'positions' | 'assets'>): number {
   const priceOf = (sym: string) => s.assets.find(a => a.symbol === sym)?.price ?? 0
   return s.cash + s.positions.reduce((acc, p) => acc + positionValue(p, priceOf(p.symbol)), 0)
+}
+
+// ---------- empirical confidence calibration ----------
+// The engine's displayed "confidence" is a heuristic score, NOT a probability.
+// These helpers make it honest by reporting the REALIZED win rate of the user's
+// own closed trades, bucketed by the confidence they carried at entry.
+export const CONF_BUCKETS: [number, number][] = [[50, 59], [60, 69], [70, 79], [80, 89], [90, 95]]
+export interface ConfBucket { lo: number; hi: number; n: number; wins: number; winRate: number | null; avgPnl: number | null }
+
+export function confidenceCalibration(trades: Trade[]): ConfBucket[] {
+  const closed = trades.filter(t => t.status === 'Closed')
+  return CONF_BUCKETS.map(([lo, hi]) => {
+    const b = closed.filter(t => t.confidence >= lo && t.confidence <= hi)
+    const wins = b.filter(t => t.pnl > 0).length
+    return { lo, hi, n: b.length, wins, winRate: b.length ? (wins / b.length) * 100 : null, avgPnl: b.length ? b.reduce((a, t) => a + t.pnl, 0) / b.length : null }
+  })
+}
+
+/** Realized win rate of closed trades in the same confidence bucket as `confidence`. */
+export function realizedWinRateFor(confidence: number, trades: Trade[]): { winRate: number | null; n: number } {
+  const bucket = CONF_BUCKETS.find(([lo, hi]) => confidence >= lo && confidence <= hi)
+  if (!bucket) return { winRate: null, n: 0 }
+  const closed = trades.filter(t => t.status === 'Closed' && t.confidence >= bucket[0] && t.confidence <= bucket[1])
+  const wins = closed.filter(t => t.pnl > 0).length
+  return { winRate: closed.length ? (wins / closed.length) * 100 : null, n: closed.length }
 }

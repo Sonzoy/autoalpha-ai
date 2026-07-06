@@ -36,15 +36,21 @@ export default function Brokers() {
   // eToro config form state
   const [etUser, setEtUser] = useState(brokerConfig.etoro?.username ?? '')
   const [etKey, setEtKey] = useState(brokerConfig.etoro?.apiKey ?? '')
-  // Binance config form state
+  // Binance config form state. The SECRET is write-only: it is never loaded
+  // into the form from storage, so the saved secret never re-enters the page
+  // DOM. A blank secret field on save means "keep the existing saved secret".
   const [bnKey, setBnKey] = useState(brokerConfig.binance?.apiKey ?? '')
-  const [bnSecret, setBnSecret] = useState(brokerConfig.binance?.apiSecret ?? '')
+  const [bnSecret, setBnSecret] = useState('')
   const [editBinance, setEditBinance] = useState(false)
 
   const saveBinance = () => {
-    const cfg = bnKey.trim() && bnSecret.trim() ? { apiKey: bnKey.trim(), apiSecret: bnSecret.trim() } : null
+    const key = bnKey.trim()
+    // Blank secret => reuse the previously saved secret (don't wipe it).
+    const secret = bnSecret.trim() || brokerConfig.binance?.apiSecret || ''
+    const cfg = key && secret ? { apiKey: key, apiSecret: secret } : null
     setBrokerConfig('binance', cfg)
     ;(brokers.binance as any).configure(cfg)
+    setBnSecret('') // never retain the secret in component state after saving
     setBrokerConn('binance', { message: cfg ? 'API key saved locally — not yet connected.' : 'Configuration cleared.', status: 'disconnected', healthy: false })
   }
 
@@ -198,10 +204,10 @@ export default function Brokers() {
               Use this with the 24/7 server (browsers may be blocked by CORS, and secrets don't belong in a web page).</p>
             <div className="field"><label>API key</label>
               <input type="password" value={bnKey} onChange={e => setBnKey(e.target.value)} autoComplete="off" placeholder="••••••••••••" /></div>
-            <div className="field"><label>API secret</label>
-              <input type="password" value={bnSecret} onChange={e => setBnSecret(e.target.value)} autoComplete="off" placeholder="••••••••••••" /></div>
+            <div className="field"><label>API secret {brokerConfig.binance ? <span className="small muted">(saved — leave blank to keep it)</span> : null}</label>
+              <input type="password" value={bnSecret} onChange={e => setBnSecret(e.target.value)} autoComplete="off" placeholder={brokerConfig.binance ? 'unchanged — type only to replace' : '••••••••••••'} /></div>
             <button className="btn sm" onClick={() => { saveBinance(); setEditBinance(false) }}>{brokerConfig.binance ? 'Update' : 'Save'}</button>
-            <button className="btn ghost sm" style={{ marginLeft: 8 }} onClick={() => setEditBinance(false)}>Cancel</button>
+            <button className="btn ghost sm" style={{ marginLeft: 8 }} onClick={() => { setBnSecret(''); setEditBinance(false) }}>Cancel</button>
             {brokerConfig.binance && <button className="btn ghost sm" style={{ marginLeft: 8 }} onClick={() => { setBnKey(''); setBnSecret(''); setBrokerConfig('binance', null); (brokers.binance as any).configure(null); setEditBinance(false) }}>Clear config</button>}
           </>}
         </div>

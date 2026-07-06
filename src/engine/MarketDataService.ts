@@ -17,7 +17,16 @@ import { AuditLogger } from './AuditLogger'
 export interface LiveQuote { price: number; source: PriceSource }
 
 const COINGECKO_IDS: Record<string, string> = {
-  'BTC/USD': 'bitcoin', 'ETH/USD': 'ethereum', 'SOL/USD': 'solana'
+  'BTC/USD': 'bitcoin', 'ETH/USD': 'ethereum', 'SOL/USD': 'solana',
+  'DOGE/USD': 'dogecoin', 'XRP/USD': 'ripple', 'AVAX/USD': 'avalanche-2',
+  'LINK/USD': 'chainlink', 'ADA/USD': 'cardano'
+}
+// Same venue we execute on — Binance is the primary crypto source for both
+// history (klines) and live quotes; CoinGecko is the graceful fallback.
+const BINANCE_PAIRS: Record<string, string> = {
+  'BTC/USD': 'BTCUSDT', 'ETH/USD': 'ETHUSDT', 'SOL/USD': 'SOLUSDT',
+  'DOGE/USD': 'DOGEUSDT', 'XRP/USD': 'XRPUSDT', 'AVAX/USD': 'AVAXUSDT',
+  'LINK/USD': 'LINKUSDT', 'ADA/USD': 'ADAUSDT'
 }
 const FINNHUB_SYMBOLS = ['AAPL', 'NVDA', 'MSFT', 'TSLA', 'SPY', 'QQQ']
 
@@ -48,11 +57,21 @@ export const MarketDataService = {
    */
   async seedCryptoHistory(): Promise<Record<string, number[]>> {
     const out: Record<string, number[]> = {}
-    await Promise.all(Object.entries(COINGECKO_IDS).map(async ([sym, id]) => {
+    await Promise.all(Object.entries(BINANCE_PAIRS).map(async ([sym, pair]) => {
       if (seededHistory.has(sym)) return
-      // days=1 → 5-minute granularity, matching the live bar cadence exactly
-      const j = await getJson(`https://api.coingecko.com/api/v3/coins/${id}/market_chart?vs_currency=usd&days=1`)
-      const prices: number[] | undefined = j?.prices?.map((p: [number, number]) => p[1])
+      // Primary: Binance klines — real 5-minute closes from the same venue we
+      // execute on (limit 200 → HISTORY_CAP keeps the most recent 160).
+      let prices: number[] | undefined
+      const k = await getJson(`https://api.binance.com/api/v3/klines?symbol=${pair}&interval=5m&limit=200`)
+      if (Array.isArray(k) && k.length > 20) {
+        prices = k.map((c: any[]) => Number(c[4])).filter((x: number) => Number.isFinite(x) && x > 0)
+      }
+      // Fallback: CoinGecko 5-minute (days=1) if Binance is unreachable/geo-blocked.
+      if (!prices || prices.length < 20) {
+        const id = COINGECKO_IDS[sym]
+        const j = await getJson(`https://api.coingecko.com/api/v3/coins/${id}/market_chart?vs_currency=usd&days=1`)
+        prices = j?.prices?.map((p: [number, number]) => p[1])
+      }
       if (prices && prices.length > 20) {
         out[sym] = prices.slice(-160)
         seededHistory.add(sym)
@@ -60,7 +79,7 @@ export const MarketDataService = {
     }))
     if (Object.keys(out).length) {
       AuditLogger.info('MARKET', `Real price history seeded for ${Object.keys(out).join(', ')}`,
-        'Momentum and volatility scores computed from actual market history (CoinGecko 5-minute bars, ~13h).')
+        'Momentum and volatility scores computed from actual Binance 5-minute klines (CoinGecko fallback), ~13h.')
     }
     return out
   },
@@ -106,13 +125,29 @@ export const MarketDataService = {
       } catch { /* feed down — fall through to built-ins/simulation */ }
     }))
 
-    // Crypto — CoinGecko
-    const ids = Object.values(COINGECKO_IDS).join(',')
-    const cg = await getJson(`https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=usd`)
-    if (cg) {
-      for (const [sym, id] of Object.entries(COINGECKO_IDS)) {
-        const p = cg[id]?.usd
-        if (typeof p === 'number' && p > 0 && !out[sym]) out[sym] = { price: p, source: 'coingecko' }
+    // Crypto — Binance spot REST (same venue as execution). This is the REST
+    // fallback layer; sub-second live ticks come from the Binance WebSocket
+    // stream (LiveStream.ts). CoinGecko backs up any symbol Binance can't serve.
+    const pairsParam = encodeURIComponent(JSON.stringify(Object.values(BINANCE_PAIRS)))
+    const bt = await getJson(`https://api.binance.com/api/v3/ticker/price?symbols=${pairsParam}`)
+    if (Array.isArray(bt)) {
+      const pairToSym = Object.fromEntries(Object.entries(BINANCE_PAIRS).map(([s, p]) => [p, s]))
+      for (const row of bt) {
+        const sym = pairToSym[row?.symbol]
+        const p = Number(row?.price)
+        if (sym && p > 0 && !out[sym]) out[sym] = { price: p, source: 'binance' }
+      }
+    }
+    // CoinGecko fallback for any crypto Binance didn't return
+    const missing = Object.keys(COINGECKO_IDS).filter(s => !out[s])
+    if (missing.length) {
+      const ids = missing.map(s => COINGECKO_IDS[s]).join(',')
+      const cg = await getJson(`https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=usd`)
+      if (cg) {
+        for (const sym of missing) {
+          const p = cg[COINGECKO_IDS[sym]]?.usd
+          if (typeof p === 'number' && p > 0) out[sym] = { price: p, source: 'coingecko' }
+        }
       }
     }
 

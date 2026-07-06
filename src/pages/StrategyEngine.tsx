@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
-import { useStore } from '../store/store'
-import { Badge, fmtTime, statusTone } from '../components/ui'
+import { useStore, confidenceCalibration } from '../store/store'
+import { Badge, fmtTime, fmtUsd, statusTone } from '../components/ui'
 import type { Trade } from '../types'
 
 const STRATEGIES = [
@@ -19,9 +19,37 @@ export default function StrategyEngine() {
   const [sel, setSel] = useState<Trade | null>(null)
 
   const decisions = trades.slice(0, 30)
+  const calib = confidenceCalibration(trades)
+  const calibTotal = calib.reduce((a, b) => a + b.n, 0)
 
   return (
     <div className="grid" style={{ gap: 14 }}>
+      <div className="card">
+        <h3>Confidence calibration — realized win rate by confidence (your closed trades)</h3>
+        <p className="small muted" style={{ marginTop: 2 }}>
+          Confidence is a heuristic signal score, <strong>not</strong> a probability. This table is the honest check:
+          the actual win rate of your own closed trades grouped by the confidence they carried at entry. If the number
+          meant something, win rate would rise down the table. Buckets with fewer than 10 trades are marked
+          low-sample — treat them as noise.
+        </p>
+        <div className="tbl-wrap mt">
+          <table className="tbl">
+            <thead><tr><th>Confidence band</th><th>Closed trades</th><th>Realized win rate</th><th>Avg P&L / trade</th><th>Sample</th></tr></thead>
+            <tbody>
+              {calibTotal === 0 && <tr><td colSpan={5} className="muted">No closed trades yet — calibration appears once trades close. Run the offline backtest (npm run backtest) for a larger-sample read.</td></tr>}
+              {calibTotal > 0 && calib.map(b => (
+                <tr key={b.lo}>
+                  <td className="mono">{b.lo}–{b.hi}</td>
+                  <td className="mono">{b.n}</td>
+                  <td className="mono">{b.winRate === null ? '—' : `${b.winRate.toFixed(0)}%`}</td>
+                  <td className={`mono ${b.avgPnl === null ? '' : b.avgPnl >= 0 ? 'pos' : 'neg'}`}>{b.avgPnl === null ? '—' : fmtUsd(b.avgPnl)}</td>
+                  <td>{b.n === 0 ? <span className="small muted">none</span> : b.n < 10 ? <Badge tone="amber">low-sample</Badge> : <Badge tone="green">ok</Badge>}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
       <div className="card">
         <div className="row spread wrap">
           <div>

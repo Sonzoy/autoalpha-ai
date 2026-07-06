@@ -23,6 +23,9 @@ export interface SelectorContext {
   riskProfile: RiskProfile
   settings: RiskSettings
   positions: Position[]
+  /** When true, short signals are discarded before scoring — the live venue
+   *  is spot-only and could never fill them (avoids dead proposals). */
+  longOnly?: boolean
 }
 
 export interface SelectorResult {
@@ -80,6 +83,9 @@ export const StrategySelector = {
 
       for (const strat of candidates) {
         const sig = strat.evaluate(asset, snap)
+        // Spot-only live venue: drop short signals — they could never fill,
+        // and keeping them would waste the single best-proposal slot.
+        if (sig && ctx.longOnly && sig.direction === 'Short') continue
         if (sig && (!best || sig.score > best.signal.score)) best = { signal: sig, asset, snap }
       }
     }
@@ -90,7 +96,9 @@ export const StrategySelector = {
         proposal: null, mode,
         note: best
           ? `Best candidate (${best.asset.symbol}, score ${best.signal.score}) below the 50-conviction threshold. Standing aside.`
-          : 'No strategy produced a qualifying signal this cycle. Standing aside preserves capital.'
+          : ctx.longOnly
+            ? 'No qualifying long signal this cycle (short signals are skipped on your spot venue). Standing aside preserves capital.'
+            : 'No strategy produced a qualifying signal this cycle. Standing aside preserves capital.'
       }
     }
 

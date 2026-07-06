@@ -8,7 +8,12 @@
 const STREAM_MAP: Record<string, string> = {
   BTCUSDT: 'BTC/USD',
   ETHUSDT: 'ETH/USD',
-  SOLUSDT: 'SOL/USD'
+  SOLUSDT: 'SOL/USD',
+  DOGEUSDT: 'DOGE/USD',
+  XRPUSDT: 'XRP/USD',
+  AVAXUSDT: 'AVAX/USD',
+  LINKUSDT: 'LINK/USD',
+  ADAUSDT: 'ADA/USD'
 }
 
 export const wsQuotes: Record<string, { price: number; ts: number }> = {}

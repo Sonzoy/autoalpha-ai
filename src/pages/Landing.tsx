@@ -29,6 +29,41 @@ function Counter({ to, suffix = '', decimals = 0 }: { to: number; suffix?: strin
   return <span ref={ref}>{v.toFixed(decimals)}{suffix}</span>
 }
 
+/* ---------- scroll reveal ---------- */
+function Reveal({ children, delay = 0 }: { children: React.ReactNode; delay?: number }) {
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const obs = new IntersectionObserver(es => {
+      if (es[0].isIntersecting) { el.classList.add('revealed'); obs.disconnect() }
+    }, { threshold: 0.15 })
+    obs.observe(el)
+    return () => obs.disconnect()
+  }, [])
+  return <div ref={ref} className="reveal" style={{ ['--d' as any]: `${delay}s` }}>{children}</div>
+}
+
+/* ---------- animated neural-net hero decoration ---------- */
+function NeuralNet() {
+  const l1 = [20, 60, 100, 140]
+  const l2 = [10, 45, 80, 115, 150]
+  const l3 = [40, 80, 120]
+  return (
+    <svg className="nnet" viewBox="0 0 600 160" aria-hidden="true">
+      {l1.map((y1, i) => l2.map((y2, j) => (
+        <line key={`a${i}-${j}`} className={`lnk${(i + j) % 2 ? ' alt' : ''}`} x1={60} y1={y1} x2={300} y2={y2} />
+      )))}
+      {l2.map((y1, i) => l3.map((y2, j) => (
+        <line key={`b${i}-${j}`} className={`lnk${(i + j) % 2 ? ' alt' : ''}`} x1={300} y1={y1} x2={540} y2={y2} />
+      )))}
+      {l1.map((y, i) => <circle key={`n1${i}`} className="nd" cx={60} cy={y} r={3.5} style={{ animationDelay: `${i * 0.3}s` }} />)}
+      {l2.map((y, i) => <circle key={`n2${i}`} className="nd b" cx={300} cy={y} r={3.5} style={{ animationDelay: `${i * 0.25}s` }} />)}
+      {l3.map((y, i) => <circle key={`n3${i}`} className="nd v" cx={540} cy={y} r={3.5} style={{ animationDelay: `${i * 0.4}s` }} />)}
+    </svg>
+  )
+}
+
 /* ---------- live ticker fed by the real Binance stream ---------- */
 function LiveTicker() {
   const [, tick] = useState(0)
@@ -38,20 +73,25 @@ function LiveTicker() {
     return () => clearInterval(id)
   }, [])
   const items = [
-    ['BTC/USD', wsQuotes['BTC/USD']], ['ETH/USD', wsQuotes['ETH/USD']], ['SOL/USD', wsQuotes['SOL/USD']]
+    ['BTC/USD', wsQuotes['BTC/USD']], ['ETH/USD', wsQuotes['ETH/USD']], ['SOL/USD', wsQuotes['SOL/USD']],
+    ['DOGE/USD', wsQuotes['DOGE/USD']], ['XRP/USD', wsQuotes['XRP/USD']], ['AVAX/USD', wsQuotes['AVAX/USD']]
   ] as const
-  const cells = items.map(([sym, q]) => (
-    <span className="l-tick" key={sym}>
-      <span className="l-tick-sym">{sym}</span>
-      <span className="l-tick-px">{q ? `$${q.price.toLocaleString(undefined, { maximumFractionDigits: 2 })}` : 'connecting…'}</span>
-      {q && <span className="badge green" style={{ fontSize: 9.5 }}><span className="dot" />REALTIME</span>}
-    </span>
-  ))
-  return (
-    <div className="l-ticker" title="Live prices streamed from Binance's public feed — the same feed the engine trades on">
+  const strip = (k: number) => (
+    <React.Fragment key={k}>
       <span className="l-tick-label">LIVE MARKET FEED</span>
-      {cells}
+      {items.map(([sym, q]) => (
+        <span className="l-tick" key={sym}>
+          <span className="l-tick-sym">{sym}</span>
+          <span className="l-tick-px">{q ? `$${q.price.toLocaleString(undefined, { maximumFractionDigits: 2 })}` : 'connecting…'}</span>
+          {q && <span className="badge green" style={{ fontSize: 9.5 }}><span className="dot" />REALTIME</span>}
+        </span>
+      ))}
       <span className="small" style={{ whiteSpace: 'nowrap' }}>+ FX (ECB) · stocks via your data key</span>
+    </React.Fragment>
+  )
+  return (
+    <div className="l-marquee" title="Live prices streamed from Binance's public feed — the same feed the engine trades on">
+      <div className="l-marquee-track">{strip(0)}{strip(1)}</div>
     </div>
   )
 }
@@ -135,6 +175,10 @@ export default function Landing({ onLaunch }: { onLaunch: () => void }) {
 
       {/* ---------- Hero ---------- */}
       <header className="l-hero l-hero2">
+        <div className="l-bgfx" aria-hidden="true">
+          <div className="gridfx" />
+          <div className="orb o1" /><div className="orb o2" /><div className="orb o3" />
+        </div>
         <div className="l-hero-text" style={{ textAlign: 'center', maxWidth: 780, margin: '0 auto' }}>
           <div className="badge blue" style={{ marginBottom: 20 }}><span className="dot" />AI engine · realtime data · non-custodial</div>
           <h1>Automated trading with an AI that<br /><span className="l-grad">shows its work on every trade.</span></h1>
@@ -146,6 +190,7 @@ export default function Landing({ onLaunch }: { onLaunch: () => void }) {
             <a className="btn ghost l-cta" href="#product">See the console</a>
           </div>
           <p className="small" style={{ marginTop: 16 }}>$100,000 simulated account · realtime market data · no deposit, ever</p>
+          <NeuralNet />
         </div>
       </header>
 
@@ -170,12 +215,14 @@ export default function Landing({ onLaunch }: { onLaunch: () => void }) {
             { icon: <Landmark size={22} />, t: '2 · Connect your broker', d: 'Binance spot with your API key, or IBKR via your own gateway. Credentials stay on your device or server — we never custody funds.' },
             { icon: <Bot size={22} />, t: '3 · Enable the AI engine', d: 'Realtime prices in, regime detection, strategy scoring, risk-sized positions out. All within limits you set.' },
             { icon: <ChartCandlestick size={22} />, t: '4 · Watch every decision', d: 'Full reasoning and every risk check on every trade. Pause, adjust, or emergency-stop anytime.' }
-          ].map(x => (
-            <div className="card l-feature" key={x.t}>
-              <div className="l-ficon">{x.icon}</div>
-              <h3 style={{ textTransform: 'none', fontSize: 14, color: 'var(--text)' }}>{x.t}</h3>
-              <p className="small">{x.d}</p>
-            </div>
+          ].map((x, i) => (
+            <Reveal key={x.t} delay={i * 0.09}>
+              <div className="card l-feature" style={{ height: '100%' }}>
+                <div className="l-ficon">{x.icon}</div>
+                <h3 style={{ textTransform: 'none', fontSize: 14, color: 'var(--text)' }}>{x.t}</h3>
+                <p className="small">{x.d}</p>
+              </div>
+            </Reveal>
           ))}
         </div>
       </section>
@@ -184,7 +231,7 @@ export default function Landing({ onLaunch }: { onLaunch: () => void }) {
       <section className="l-section l-alt" id="product">
         <h2>A brokerage-grade operations console</h2>
         <p className="l-sub">Dense, transparent, and built for oversight — not a slot machine.</p>
-        <div style={{ maxWidth: 860, margin: '0 auto' }}><Showcase /></div>
+        <Reveal><div style={{ maxWidth: 860, margin: '0 auto' }}><Showcase /></div></Reveal>
       </section>
 
       {/* ---------- Strategies ---------- */}
@@ -201,11 +248,13 @@ export default function Landing({ onLaunch }: { onLaunch: () => void }) {
             { icon: <ShieldCheck size={18} />, t: 'Defensive Hedge', d: 'Rotates defensive and trims exposure when macro risk climbs.' },
             { icon: <Lock size={18} />, t: 'Cash / Risk-Off', d: 'Stands aside entirely in extreme conditions. Capital preserved.' },
             { icon: <BrainCircuit size={18} />, t: 'Risk engine on top', d: 'Allocation caps, stops, loss limits, drawdown auto-pause, correlation caps — enforced before any order exists.' }
-          ].map(x => (
-            <div className="card l-feature" key={x.t}>
-              <div className="row" style={{ marginBottom: 6 }}><span className="l-ficon sm">{x.icon}</span><strong style={{ fontSize: 13.5 }}>{x.t}</strong></div>
-              <p className="small">{x.d}</p>
-            </div>
+          ].map((x, i) => (
+            <Reveal key={x.t} delay={i * 0.07}>
+              <div className="card l-feature" style={{ height: '100%' }}>
+                <div className="row" style={{ marginBottom: 6 }}><span className="l-ficon sm">{x.icon}</span><strong style={{ fontSize: 13.5 }}>{x.t}</strong></div>
+                <p className="small">{x.d}</p>
+              </div>
+            </Reveal>
           ))}
         </div>
       </section>
@@ -213,7 +262,7 @@ export default function Landing({ onLaunch }: { onLaunch: () => void }) {
       {/* ---------- Comparison ---------- */}
       <section className="l-section l-alt">
         <h2>Why automate at all?</h2>
-        <div className="tbl-wrap" style={{ maxWidth: 860, margin: '24px auto 0' }}>
+        <Reveal><div className="tbl-wrap" style={{ maxWidth: 860, margin: '24px auto 0' }}>
           <table className="tbl l-cmp">
             <thead><tr><th></th><th>Manual trading</th><th style={{ color: 'var(--blue)' }}>AutoAlpha AI</th></tr></thead>
             <tbody>
@@ -229,7 +278,7 @@ export default function Landing({ onLaunch }: { onLaunch: () => void }) {
               ))}
             </tbody>
           </table>
-        </div>
+        </div></Reveal>
       </section>
 
       {/* ---------- Security ---------- */}
@@ -243,11 +292,13 @@ export default function Landing({ onLaunch }: { onLaunch: () => void }) {
             { icon: <Eye size={15} />, t: 'Every decision on the record', d: 'The audit trail explains every proposal, every risk check result, every broker response. Nothing happens silently.' },
             { icon: <Gauge size={15} />, t: 'Realtime data or no trade', d: 'By default the engine only trades assets with live feeds — sub-second crypto streaming, ECB FX, your equity data key. Simulated prices are labeled and excluded.' },
             { icon: <BrainCircuit size={15} />, t: 'Risk limits you control', d: 'Per-trade caps, stop-loss, take-profit, trailing stops, daily loss limits, drawdown auto-pause — enforced by code, adjustable anytime.' }
-          ].map(x => (
-            <div className="card l-feature" key={x.t}>
-              <div className="row" style={{ marginBottom: 6 }}><span className="l-ficon sm">{x.icon}</span><strong style={{ fontSize: 13.5 }}>{x.t}</strong></div>
-              <p className="small">{x.d}</p>
-            </div>
+          ].map((x, i) => (
+            <Reveal key={x.t} delay={i * 0.07}>
+              <div className="card l-feature" style={{ height: '100%' }}>
+                <div className="row" style={{ marginBottom: 6 }}><span className="l-ficon sm">{x.icon}</span><strong style={{ fontSize: 13.5 }}>{x.t}</strong></div>
+                <p className="small">{x.d}</p>
+              </div>
+            </Reveal>
           ))}
         </div>
       </section>
@@ -263,8 +314,10 @@ export default function Landing({ onLaunch }: { onLaunch: () => void }) {
             ['What is paper trading?', 'A $100,000 simulated account running the full engine on the same realtime data. It\'s the default for every user and the right place to evaluate the system before real money is involved.'],
             ['How does live trading get enabled?', 'Four gates: a connected broker, your unlock request, compliance review with admin approval, and your explicit confirmation — plus a separate pre-authorization before the first real order. Re-lock or emergency-stop anytime.'],
             ['Can I see why the AI made a trade?', 'Yes — every trade records the strategy, regime, confidence score, plain-language rationale, and the result of every individual risk check. The full decision path is documented in-app.']
-          ].map(([q, a]) => (
-            <details key={q} className="card l-qa"><summary>{q}</summary><p className="small mt">{a}</p></details>
+          ].map(([q, a], i) => (
+            <Reveal key={q} delay={i * 0.05}>
+              <details className="card l-qa"><summary>{q}</summary><p className="small mt">{a}</p></details>
+            </Reveal>
           ))}
         </div>
       </section>

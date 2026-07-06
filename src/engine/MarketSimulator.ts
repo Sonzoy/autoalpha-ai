@@ -29,6 +29,18 @@ export class MarketSimulator {
   constructor(seedAssets?: AssetState[]) {
     if (seedAssets && seedAssets.length) {
       this.assets = seedAssets
+      // Universe migration: persisted workspaces froze the asset list at
+      // creation time — seed any assets added to ASSET_UNIVERSE since, so
+      // new tradable pairs actually appear for existing users.
+      for (const d of ASSET_UNIVERSE) {
+        if (!this.assets.some(a => a.symbol === d.symbol)) {
+          this.assets.push({
+            symbol: d.symbol, name: d.name, market: d.market,
+            price: d.basePrice, prevPrice: d.basePrice, dayOpen: d.basePrice,
+            history: this.warmup(d), vol: d.vol, decimals: d.decimals
+          })
+        }
+      }
     } else {
       this.assets = ASSET_UNIVERSE.map((d: AssetDef) => ({
         symbol: d.symbol, name: d.name, market: d.market,

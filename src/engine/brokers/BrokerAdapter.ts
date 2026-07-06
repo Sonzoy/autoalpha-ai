@@ -34,6 +34,10 @@ export interface OrderResult {
   ok: boolean
   orderId?: string
   fillPrice?: number
+  /** Actually executed base quantity net of base-asset fees — what the
+   *  account really holds/sold. Ledger positions must use this, not the
+   *  requested qty, or spot closes can exceed the sellable balance. */
+  filledQty?: number
   commission?: number
   reason?: string
 }
@@ -49,9 +53,17 @@ export interface BrokerAdapter {
   readonly name: string
   readonly description: string
   readonly capabilities: string[]
+  /** False for venues that cannot open short positions (e.g. spot exchanges).
+   *  Undefined/true means shorting is supported. Used to keep the engine from
+   *  generating short proposals that could never execute. */
+  readonly canShort?: boolean
 
   status(): BrokerStatus
   healthy(): boolean
+  /** For real venues with a fixed tradable set (e.g. spot exchanges), returns
+   *  whether an app symbol maps to a routable pair. Undefined = no restriction
+   *  (paper/placeholder venues accept the whole universe). */
+  supportsSymbol?(symbol: string): boolean
   connect(): Promise<ConnectResult>
   disconnect(): void
   previewOrder(req: OrderRequest, availableCash: number): OrderPreview

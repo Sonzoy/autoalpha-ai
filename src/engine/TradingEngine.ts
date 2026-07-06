@@ -247,13 +247,39 @@ async function tick(): Promise<void> {
   {
     const s = useStore.getState()
     const { equity, live } = equityBasis(assets)
-    if (equity > s.peakEquity) useStore.getState().setPeak(equity)
+
+    // Baseline sanity: when the equity basis switches (paper ledger ↔ real
+    // broker account) the stored baselines can be orders of magnitude off —
+    // e.g. paper $100k dayStart vs real $208 equity reads as a "-99.79% daily
+    // loss" and falsely trips the guards. A >3x divergence cannot be a real
+    // intraday move on this account; rebase instead of "breaching".
+    if (equity > 0 && (s.dayStartEquity > equity * 3 || s.dayStartEquity < equity / 3 ||
+      s.peakEquity > equity * 3 || s.peakEquity < equity / 3)) {
+      useStore.getState().rollDay(equity)
+      useStore.getState().setPeak(equity)
+      AuditLogger.info('RISK', 'Risk baselines rebased — equity basis changed',
+        `Stored baselines (day ${s.dayStartEquity.toFixed(2)}, peak ${s.peakEquity.toFixed(2)}) diverged >3x from current ${live ? 'real account' : 'paper'} equity ${equity.toFixed(2)}. Guards now measure against the current basis.`)
+    }
+
+    if (equity > useStore.getState().peakEquity) useStore.getState().setPeak(equity)
     const s2 = useStore.getState()
     const drawdown = s2.peakEquity > 0 ? ((equity - s2.peakEquity) / s2.peakEquity) * 100 : 0
     const dailyPnl = equity - s2.dayStartEquity
     useStore.getState().pushPerf({ ts: Date.now(), equity, drawdown: round2(drawdown), dailyPnl: round2(dailyPnl), live })
 
-    if (s2.autoTrading && !s2.autoPaused) {
+    // Self-heal a stale risk pause: if NO guard breaches against the CURRENT
+    // baselines (they were rebased, or a new day started), the pause describes
+    // a state that no longer exists — clear it. A real daily-loss pause stays
+    // in force for the rest of that day; a drawdown pause clears only once
+    // equity recovers inside the threshold.
+    if (s2.autoPaused && RiskManager.portfolioGuards(riskCtx(equity)) === null) {
+      useStore.getState().resumeTrading()
+      AuditLogger.info('RISK', 'Stale risk pause auto-cleared',
+        `The recorded breach ("${s2.pauseReason}") no longer holds against current baselines (equity ${equity.toFixed(2)}, day start ${s2.dayStartEquity.toFixed(2)}, peak ${s2.peakEquity.toFixed(2)}).`)
+    }
+
+    const s3 = useStore.getState()
+    if (s3.autoTrading && !s3.autoPaused) {
       const guard = RiskManager.portfolioGuards(riskCtx(equity))
       if (guard) {
         useStore.getState().pauseTrading(guard)
@@ -280,18 +306,29 @@ async function tick(): Promise<void> {
 
   // Live-data-only policy: never open trades on simulated prices unless the
   // user has explicitly allowed demo assets.
-  const tradable = s.liveDataOnly
+  let tradable = s.liveDataOnly
     ? assets.filter(a => (s.assetSources[a.symbol] ?? 'simulated') !== 'simulated')
     : assets
+  // Live venue restriction: only propose on pairs the connected real broker can
+  // actually route (e.g. Binance spot = BTC/ETH/SOL). This prevents unfillable
+  // proposals — and the redundant "unmapped pair" rejection records they create
+  // — for live-priced assets the broker doesn't support (e.g. FX on Binance).
+  const liveVenue = s.tradingMode === 'live' ? liveAdapter() : null
+  if (liveVenue?.supportsSymbol) tradable = tradable.filter(a => liveVenue.supportsSymbol!(a.symbol))
   if (s.liveDataOnly && tradable.filter(a => s.profile.markets.includes(a.market)).length === 0) {
     useStore.getState().setEngineStatus('Cash / Risk-Off',
-      'Live-data-only policy: no live-priced assets in your selected markets yet. Crypto & FX feeds are automatic; add a Finnhub key or custom feeds for stocks/ETFs (Market Intel page).', 0)
+      liveVenue?.supportsSymbol
+        ? `No tradable pairs: your ${liveVenue.name} account supports only its listed spot pairs (crypto), and none of those are in your selected markets. Add Crypto in your profile, or connect a broker that covers these markets.`
+        : 'Live-data-only policy: no live-priced assets in your selected markets yet. Crypto & FX feeds are automatic; add a Finnhub key or custom feeds for stocks/ETFs (Market Intel page).', 0)
     return
   }
 
+  // Spot-only live venue (e.g. Binance spot) cannot short — tell the selector
+  // to skip short signals so it never wastes a cycle on an unfillable proposal.
+  const longOnly = s.tradingMode === 'live' && liveAdapter()?.canShort === false
   const selection = StrategySelector.select(tradable, intel, {
     markets: s.profile.markets, riskProfile: s.profile.riskProfile,
-    settings: s.settings, positions: s.positions
+    settings: s.settings, positions: s.positions, longOnly
   })
 
   if (!selection.proposal) {
@@ -302,14 +339,39 @@ async function tick(): Promise<void> {
 
   const prop = selection.proposal
   useStore.getState().setEngineStatus(prop.strategy, selection.note, prop.confidence)
-  AuditLogger.info('STRATEGY', `Proposal: ${prop.direction} ${prop.symbol} via ${prop.strategy} (confidence ${prop.confidence})`, prop.rationale)
 
   const { equity } = equityBasis(assets)
-  const decision = RiskManager.check(prop, riskCtx(equity))
-
   const price = priceOf(prop.symbol)
+  if (!price) return
+  // Small-account sizing floor: the profile's base allocation (e.g. 5%) can
+  // size below the minimum trade on small real accounts even when the user's
+  // cap allows more. Lift the allocation toward the cap so orders clear the
+  // floor with ~30% headroom instead of standing aside forever.
+  {
+    const minTradeF = s.settings.minTradeUsd ?? 0
+    const floorPct = equity > 0 && minTradeF > 0 ? (minTradeF * 1.3 / equity) * 100 : 0
+    if (prop.allocationPct < floorPct && floorPct <= s.settings.maxAllocationPct) {
+      prop.allocationPct = Math.round(floorPct * 10) / 10
+    }
+  }
   // Live mode with a synced real account: size orders from REAL equity.
   const qty = roundQty((equity * prop.allocationPct / 100) / price)
+  const orderValue = qty * price
+
+  // Dust protection: skip sub-scale orders. This is a routine "stand aside"
+  // decision, not a trade — surface it as engine status only. Persisting a
+  // Rejected record every cycle just produced redundant log noise (the exact
+  // symptom of the old 400 identical rejections).
+  const minTrade = s.settings.minTradeUsd ?? 0
+  if (orderValue < minTrade) {
+    useStore.getState().setEngineStatus(prop.strategy,
+      `Best setup (${prop.symbol}) sizes to ${orderValue.toFixed(2)} USD — below your ${minTrade} USD minimum trade size. Raise max allocation % (Risk Management) or add funds. Holding.`,
+      prop.confidence)
+    return
+  }
+
+  AuditLogger.info('STRATEGY', `Proposal: ${prop.direction} ${prop.symbol} via ${prop.strategy} (confidence ${prop.confidence})`, prop.rationale)
+  const decision = RiskManager.check(prop, riskCtx(equity))
   const stopLoss = prop.direction === 'Long' ? price * (1 - prop.stopLossPct / 100) : price * (1 + prop.stopLossPct / 100)
   const takeProfit = prop.direction === 'Long' ? price * (1 + prop.takeProfitPct / 100) : price * (1 - prop.takeProfitPct / 100)
 
@@ -324,15 +386,6 @@ async function tick(): Promise<void> {
     regime: prop.regime, openedAt: Date.now()
   }
   useStore.getState().addTrade(trade)
-
-  // User-configurable minimum trade size (dust protection): skip orders
-  // whose value is below the threshold — commissions eat tiny trades alive.
-  const minTrade = s.settings.minTradeUsd ?? 0
-  if (qty * price < minTrade) {
-    useStore.getState().patchTrade(trade.id, { status: 'Rejected', closeReason: `Below minimum trade size: ${(qty * price).toFixed(2)} USD vs ${minTrade} USD minimum (Risk Management setting).` })
-    AuditLogger.info('RISK', `Trade skipped: ${prop.symbol} below minimum size`, `${(qty * price).toFixed(2)} < ${minTrade} USD. Raise allocation % or lower the minimum.`)
-    return
-  }
 
   if (!decision.approved) {
     useStore.getState().patchTrade(trade.id, { status: 'Rejected', closeReason: decision.summary })
@@ -380,12 +433,19 @@ async function tick(): Promise<void> {
   }
 
   const fill = result.fillPrice
-  const cost = qty * fill + (result.commission ?? 0)
-  useStore.getState().setCash(useStore.getState().cash - cost)
-  useStore.getState().patchTrade(trade.id, { status: 'Filled', entryPrice: round4(fill) })
+  // Ledger must track what the account REALLY holds: the venue's executed
+  // quantity net of base-asset fees — not the requested qty. Otherwise the
+  // eventual close tries to sell more than the free balance and is rejected.
+  const heldQty = result.filledQty && result.filledQty > 0 ? result.filledQty : qty
+  const cost = heldQty * fill + (result.commission ?? 0)
+  // Only the paper ledger tracks cash. For a LIVE fill the real broker account
+  // is authoritative — mutating the in-app cash would be redundant, misleading
+  // bookkeeping that double-counts against the synced balance.
+  if (adapter.id === 'paper') useStore.getState().setCash(useStore.getState().cash - cost)
+  useStore.getState().patchTrade(trade.id, { status: 'Filled', entryPrice: round4(fill), qty: heldQty })
   useStore.getState().addPosition({
     tradeId: trade.id, symbol: prop.symbol, market: prop.market, direction: prop.direction,
-    qty, entryPrice: fill,
+    qty: heldQty, entryPrice: fill,
     stopLoss: prop.direction === 'Long' ? fill * (1 - prop.stopLossPct / 100) : fill * (1 + prop.stopLossPct / 100),
     takeProfit: prop.direction === 'Long' ? fill * (1 + prop.takeProfitPct / 100) : fill * (1 - prop.takeProfitPct / 100),
     strategy: prop.strategy, confidence: prop.confidence, openedAt: Date.now()
@@ -419,7 +479,9 @@ async function closePosition(p: Position, price: number, reason: string): Promis
   const pnl = positionPnl(p, price)
   const proceeds = positionValue(p, price)
   const commission = Math.max(1, proceeds * 0.0005)
-  useStore.getState().setCash(useStore.getState().cash + proceeds - commission)
+  // Paper ledger only — live proceeds land in the real broker account, which
+  // the 60s portfolio sync reflects. See the fill path for the same guard.
+  if (!trade || trade.broker === 'paper') useStore.getState().setCash(useStore.getState().cash + proceeds - commission)
   useStore.getState().removePosition(p.tradeId)
   useStore.getState().patchTrade(p.tradeId, {
     status: 'Closed', exitPrice: round4(price), pnl: round2(pnl - commission),

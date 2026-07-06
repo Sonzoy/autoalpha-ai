@@ -1,7 +1,7 @@
 import React from 'react'
 import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { Bot, PauseCircle } from 'lucide-react'
-import { useStore, computeEquity, positionPnl, START_CASH } from '../store/store'
+import { useStore, computeEquity, positionPnl, realizedWinRateFor, START_CASH } from '../store/store'
 import { Badge, Meter, Segmented, fmtPct, fmtUsd, fmtTime, statusTone } from '../components/ui'
 
 export default function Dashboard() {
@@ -38,6 +38,12 @@ export default function Dashboard() {
   const priceOf = (sym: string) => assets.find(a => a.symbol === sym)?.price ?? 0
   const chart = perf.slice(-240).map(p => ({ t: fmtTime(p.ts), equity: Math.round(p.equity) }))
   const liveCount = Object.values(assetSources).filter(s => s !== 'simulated').length
+  // Real spendable stablecoin balance at the broker — the number that matters
+  // in live mode (the paper "mirror ledger" figure was meaningless there).
+  const STABLES = ['USDT', 'USDC', 'FDUSD', 'BUSD', 'DAI', 'TUSD']
+  const stableUsd = liveAcct
+    ? brokerPortfolio!.balances.filter(b => STABLES.includes(b.asset)).reduce((a, b) => a + (b.usd ?? 0), 0)
+    : 0
   const visiblePositionCount = liveAcct ? brokerPortfolio!.balances.filter(b => b.usd === null || b.usd > 1).length : positions.length
 
   return (
@@ -69,9 +75,9 @@ export default function Dashboard() {
               </div>
             </div>
             <div style={{ textAlign: 'right' }}>
-              <div className="stat-label">{liveAcct ? 'Mirror ledger (in-app)' : 'Cash available'}</div>
-              <div className="stat-value" style={{ fontSize: 18 }}>{fmtUsd(liveAcct ? equity : cash, 0)}</div>
-              <div className="stat-sub">{liveCount} live-priced assets{liveAcct ? ' · broker is authoritative' : ''}</div>
+              <div className="stat-label">{liveAcct ? 'Available to trade (broker)' : 'Cash available'}</div>
+              <div className="stat-value" style={{ fontSize: 18 }}>{fmtUsd(liveAcct ? stableUsd : cash, 0)}</div>
+              <div className="stat-sub">{liveCount} live-priced assets{liveAcct ? ' · stablecoin balance, broker is authoritative' : ''}</div>
             </div>
           </div>
           <div style={{ height: 190, marginTop: 14 }}>
@@ -107,6 +113,16 @@ export default function Dashboard() {
           <div className="hero-kv" style={{ display: 'block' }}>
             <div className="row spread" style={{ marginBottom: 6 }}><span>AI confidence</span><strong>{lastConfidence || '—'}</strong></div>
             <Meter value={lastConfidence} color="var(--blue)" />
+            {lastConfidence > 0 && (() => {
+              const { winRate, n } = realizedWinRateFor(lastConfidence, trades)
+              return (
+                <div className="small muted" style={{ marginTop: 5 }}>
+                  {winRate === null || n < 10
+                    ? `Not enough closed trades yet to calibrate this level (${n} so far). Confidence is a signal score, not a win probability.`
+                    : `At this confidence, your closed trades have won ${winRate.toFixed(0)}% (n=${n}).`}
+                </div>
+              )
+            })()}
           </div>
           <p className="small" style={{ margin: '10px 0', minHeight: 44 }}>{engineNote}</p>
           <div className="row spread" style={{ borderTop: '1px solid var(--border-2)', paddingTop: 10 }}>

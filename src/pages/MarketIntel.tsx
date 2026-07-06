@@ -23,10 +23,16 @@ function sentColor(v: number): string {
 }
 
 export default function MarketIntel() {
-  const assets = useStore(s => s.assets)
+  const allAssets = useStore(s => s.assets)
   const intel = useStore(s => s.intel)
   const regime = useStore(s => s.regime)
   const assetSources = useStore(s => s.assetSources)
+  const tradingMode = useStore(s => s.tradingMode)
+  // Live mode shows only real, live-priced assets — simulated-price rows are
+  // hidden so nothing on the live screen looks like tradable real-market data.
+  const assets = tradingMode === 'live'
+    ? allAssets.filter(a => (assetSources[a.symbol] ?? 'simulated') !== 'simulated')
+    : allAssets
   const marketKeys = useStore(s => s.marketKeys)
   const setMarketKey = useStore(s => s.setMarketKey)
   const [finnhubDraft, setFinnhubDraft] = useState(marketKeys.finnhub)

@@ -49,7 +49,9 @@ export default function Portfolio() {
         <div className="card"><div className="stat-label">{liveAcct ? `${brokerPortfolio!.broker.toUpperCase()} account value` : 'Total equity'}</div><div className="stat-value">{fmtUsd(displayedEquity, 0)}</div></div>
         <div className="card"><div className="stat-label">{liveAcct ? 'Synced holdings' : 'Realized P&L'}</div><div className={`stat-value ${!liveAcct && realized < 0 ? 'neg' : 'pos'}`}>{liveAcct ? brokerPortfolio!.balances.length : fmtUsd(realized)}</div></div>
         <div className="card"><div className="stat-label">{liveAcct ? 'Broker source' : 'Unrealized P&L'}</div><div className={`stat-value ${!liveAcct && unrealized < 0 ? 'neg' : 'pos'}`}>{liveAcct ? brokerPortfolio!.broker.toUpperCase() : fmtUsd(unrealized)}</div></div>
-        <div className="card"><div className="stat-label">{liveAcct ? 'Mirror cash' : 'Cash balance'}</div><div className="stat-value">{fmtUsd(cash, 0)}</div></div>
+        <div className="card"><div className="stat-label">{liveAcct ? 'Available to trade' : 'Cash balance'}</div><div className="stat-value">{fmtUsd(liveAcct
+          ? brokerPortfolio!.balances.filter(b => ['USDT', 'USDC', 'FDUSD', 'BUSD', 'DAI', 'TUSD'].includes(b.asset)).reduce((a, b) => a + (b.usd ?? 0), 0)
+          : cash, 0)}</div></div>
       </div>
 
       <div className="grid g2">

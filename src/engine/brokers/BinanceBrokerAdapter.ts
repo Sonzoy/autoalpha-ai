@@ -22,7 +22,9 @@ import type { BrokerAdapter, ConnectResult, OrderPreview, OrderRequest, OrderRes
  */
 
 const SYMBOL_MAP: Record<string, string> = {
-  'BTC/USD': 'BTCUSDT', 'ETH/USD': 'ETHUSDT', 'SOL/USD': 'SOLUSDT'
+  'BTC/USD': 'BTCUSDT', 'ETH/USD': 'ETHUSDT', 'SOL/USD': 'SOLUSDT',
+  'DOGE/USD': 'DOGEUSDT', 'XRP/USD': 'XRPUSDT', 'AVAX/USD': 'AVAXUSDT',
+  'LINK/USD': 'LINKUSDT', 'ADA/USD': 'ADAUSDT'
 }
 
 interface SymbolFilter { stepSize: number; minQty: number; minNotional: number }
@@ -38,6 +40,7 @@ async function hmacHex(secret: string, message: string): Promise<string> {
 export class BinanceBrokerAdapter implements BrokerAdapter {
   readonly id = 'binance' as const
   readonly name = 'Binance'
+  readonly canShort = false // spot accounts are long-only
   readonly description = 'Real spot trading on your own Binance account via signed API requests. Long-only (spot cannot short). Funds stay at Binance.'
   readonly capabilities = [
     'Read balances', 'Market data', 'Order preview', 'Place spot market order (long / close-long)',
@@ -48,15 +51,20 @@ export class BinanceBrokerAdapter implements BrokerAdapter {
   private cfg: BinanceConfig | null = null
   private filters: Record<string, SymbolFilter> = {}
   private usdtFree = 0
-  private balances: { asset: string; qty: number }[] = []
+  private balances: { asset: string; qty: number; free: number }[] = []
 
   /** Cached real account balances (refreshed on connect/sync). */
-  getCachedBalances(): { asset: string; qty: number }[] { return this.balances }
+  getCachedBalances(): { asset: string; qty: number; free: number }[] { return this.balances }
 
   private cacheBalances(acctJson: any): void {
     this.balances = (acctJson?.balances ?? [])
-      .map((b: any) => ({ asset: b.asset, qty: Number(b.free) + Number(b.locked) }))
+      .map((b: any) => ({ asset: b.asset, qty: Number(b.free) + Number(b.locked), free: Number(b.free) }))
       .filter((b: { qty: number }) => b.qty > 0)
+  }
+
+  /** Free (sellable) balance of an asset, 0 if unknown. */
+  private freeOf(asset: string): number {
+    return this.balances.find(b => b.asset === asset)?.free ?? 0
   }
 
   configure(cfg: BinanceConfig | null): void {
@@ -67,6 +75,8 @@ export class BinanceBrokerAdapter implements BrokerAdapter {
 
   status(): BrokerStatus { return this.st }
   healthy(): boolean { return this.st === 'connected' }
+  /** Only symbols mapped to a Binance spot pair are routable. */
+  supportsSymbol(symbol: string): boolean { return !!SYMBOL_MAP[symbol] }
 
   private async signed(path: string, params: Record<string, string | number>, method: 'GET' | 'POST' = 'GET'):
     Promise<{ ok: boolean; status: number; j: any }> {
@@ -114,7 +124,12 @@ export class BinanceBrokerAdapter implements BrokerAdapter {
         }
       } catch { /* filters fall back to defaults */ }
       this.st = 'connected'
-      const canTrade = acct.j?.permissions?.includes?.('SPOT') ?? true
+      // Binance reports spot trade capability in three shapes depending on the
+      // account: canTrade=true, permissions containing 'SPOT', or (newer
+      // accounts) trade-group codes like 'TRD_GRP_009'. Checking only 'SPOT'
+      // falsely reported enabled keys as read-only.
+      const perms: string[] = Array.isArray(acct.j?.permissions) ? acct.j.permissions : []
+      const canTrade = acct.j?.canTrade === true || perms.includes('SPOT') || perms.some(p => String(p).startsWith('TRD_GRP'))
       AuditLogger.info('BROKER', 'Binance connected', `Spot USDT available: ${this.usdtFree.toFixed(2)}. Trading permission: ${canTrade ? 'yes' : 'no'}.`)
       return {
         ok: true,
@@ -142,6 +157,15 @@ export class BinanceBrokerAdapter implements BrokerAdapter {
 
   previewOrder(req: OrderRequest, _cash: number): OrderPreview {
     const symbol = SYMBOL_MAP[req.symbol]
+    // Fee-aware close clamp: a spot BUY pays its fee in the BASE asset, so the
+    // account holds slightly less than the ledger's recorded qty. Selling the
+    // recorded qty would exceed the free balance and be rejected (-2010).
+    // For reduce-only orders, never ask for more than the account can sell.
+    if (req.reduceOnly && symbol) {
+      const baseAsset = req.symbol.split('/')[0]
+      const free = this.freeOf(baseAsset)
+      if (free > 0 && free < req.qty) req = { ...req, qty: free }
+    }
     const value = req.qty * req.refPrice
     const base = { request: req, estimatedValue: value, estimatedSlippagePct: 0.05, commission: value * 0.001 }
     if (this.st !== 'connected') return { ...base, ok: false, note: 'Binance not connected.' }
@@ -178,11 +202,17 @@ export class BinanceBrokerAdapter implements BrokerAdapter {
       const fillPrice = fills.length
         ? fills.reduce((a, f) => a + Number(f.price) * Number(f.qty), 0) / fills.reduce((a, f) => a + Number(f.qty), 0)
         : (executed > 0 && quote > 0 ? quote / executed : req.refPrice)
+      // Fees charged in the BASE asset (typical for BUYs without BNB) reduce
+      // what the account actually holds — report the NET quantity so the
+      // ledger position matches the sellable balance.
+      const baseFee = fills.reduce((a, f) =>
+        a + (f.commissionAsset && symbol.startsWith(String(f.commissionAsset)) ? Number(f.commission) : 0), 0)
+      const filledQty = side === 'BUY' ? Math.max(0, executed - baseFee) : executed
       // refresh available balance opportunistically
       void this.sync()
       AuditLogger.warn('BROKER', `LIVE BINANCE FILL: ${side} ${executed} ${symbol} @ ${fillPrice.toFixed(4)}`,
-        `Order ${r.j.orderId}. Your Binance account is the authoritative record.`)
-      return { ok: true, orderId: String(r.j.orderId), fillPrice, commission: quote * 0.001 }
+        `Order ${r.j.orderId}. Net after base-asset fees: ${filledQty}. Your Binance account is the authoritative record.`)
+      return { ok: true, orderId: String(r.j.orderId), fillPrice, filledQty, commission: quote * 0.001 }
     } catch (e) {
       AuditLogger.error('BROKER', 'Binance order transmission failed', String(e))
       return { ok: false, reason: `Binance transmission error: ${String(e).slice(0, 120)}` }
