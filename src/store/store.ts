@@ -1,8 +1,8 @@
 import { create } from 'zustand'
 import type {
   AssetState, AuditEvent, BinanceConfig, BrokerConnState, BrokerId, BrokerPortfolio, CustomFeed,
-  EtoroConfig, IbkrConfig, IntelSnapshot, PerfPoint, Position, PriceSource, Regime, RiskSettings,
-  SimSpeed, StrategyName, ThemeMode, Trade, TradingMode, UserProfile
+  EngineStatus, EtoroConfig, IbkrConfig, IntelSnapshot, PerfPoint, Position, PriceSource, Regime,
+  RiskSettings, SimSpeed, StrategyName, ThemeMode, Trade, TradingMode, UserProfile
 } from '../types'
 import { RISK_DEFAULTS } from '../types'
 import { AuditLogger } from '../engine/AuditLogger'
@@ -66,9 +66,16 @@ export interface Workspace {
   lastConfidence: number
   assetSources: Record<string, PriceSource>
   cash: number
+  // LIVE risk baselines (real account); paper has its own pair below —
+  // both pipelines run in parallel and must never share a baseline.
   dayStartEquity: number
   peakEquity: number
+  paperDayStart: number
+  paperPeak: number
   dayStamp: string
+  /** Per-pipeline engine status; engineMode/engineNote/lastConfidence mirror
+   *  the currently VIEWED mode (tradingMode) for UI compatibility. */
+  engineByMode: Record<TradingMode, EngineStatus>
   positions: Position[]
   trades: Trade[]
   perf: PerfPoint[]
@@ -95,7 +102,13 @@ export function freshWorkspace(): Workspace {
     engineMode: 'Cash / Risk-Off', engineNote: 'Engine idle.', lastConfidence: 0,
     assetSources: {},
     cash: START_CASH, dayStartEquity: START_CASH, peakEquity: START_CASH,
-    dayStamp: new Date().toDateString(), positions: [], trades: [], perf: [], audit: [],
+    paperDayStart: START_CASH, paperPeak: START_CASH,
+    dayStamp: new Date().toDateString(),
+    engineByMode: {
+      paper: { mode: 'Cash / Risk-Off', note: 'Engine idle.', confidence: 0 },
+      live: { mode: 'Cash / Risk-Off', note: 'Engine idle.', confidence: 0 }
+    },
+    positions: [], trades: [], perf: [], audit: [],
     brokerConn: initialBrokerConn(),
     brokerConfig: { ibkr: null, etoro: null, binance: null },
     marketKeys: { finnhub: '' },
@@ -132,6 +145,12 @@ function loadWorkspace(email: string): Workspace | null {
       ws.brokerConfig = { ...fresh.brokerConfig, ...(parsed.brokerConfig ?? {}) }
       ws.marketKeys = { ...fresh.marketKeys, ...(parsed.marketKeys ?? {}) }
       ws.settings = { ...fresh.settings, ...(parsed.settings ?? {}) } // backfill new risk settings
+      ws.engineByMode = { ...fresh.engineByMode, ...(parsed.engineByMode ?? {}) }
+      // Parallel-mode migration: tag pre-existing positions with their venue,
+      // derived from the owning trade (default 'paper' — never assume real).
+      ws.positions = (ws.positions ?? []).map(p => p.broker ? p : {
+        ...p, broker: ws.trades.find(t => t.id === p.tradeId)?.broker ?? 'paper'
+      })
       return ws
     }
   } catch { /* corrupted workspace — fresh */ }
@@ -195,10 +214,13 @@ export interface AppState extends Workspace {
   setLiveUnlocked: (v: boolean) => void
   setMarket: (assets: AssetState[], intel: Record<string, IntelSnapshot>, regime: Regime) => void
   setEngineStatus: (mode: StrategyName, note: string, confidence: number) => void
+  setEngineStatusFor: (tm: TradingMode, mode: StrategyName, note: string, confidence: number) => void
   setAssetSources: (m: Record<string, PriceSource>) => void
   setCash: (v: number) => void
   rollDay: (equity: number) => void
+  rollPaperDay: (equity: number) => void
   setPeak: (v: number) => void
+  setPaperPeak: (v: number) => void
   addTrade: (t: Trade) => void
   patchTrade: (id: string, patch: Partial<Trade>) => void
   addPosition: (p: Position) => void
@@ -307,11 +329,19 @@ export const useStore = create<AppState>()((set, get) => ({
 
   setMarket: (assets, intel, regime) => set({ assets, intel, regime }),
   setEngineStatus: (mode, note, confidence) => set({ engineMode: mode, engineNote: note, lastConfidence: confidence }),
+  // Pipeline-scoped status: updates that pipeline's record; mirrors into the
+  // legacy fields only when the user is currently viewing that mode.
+  setEngineStatusFor: (tm, mode, note, confidence) => set(s => ({
+    engineByMode: { ...s.engineByMode, [tm]: { mode, note, confidence } },
+    ...(s.tradingMode === tm ? { engineMode: mode, engineNote: note, lastConfidence: confidence } : {})
+  })),
   setAssetSources: m => set({ assetSources: m }),
 
   setCash: v => set({ cash: v }),
   rollDay: equity => set({ dayStamp: new Date().toDateString(), dayStartEquity: equity }),
+  rollPaperDay: equity => set({ paperDayStart: equity }),
   setPeak: v => set({ peakEquity: v }),
+  setPaperPeak: v => set({ paperPeak: v }),
   addTrade: t => set(s => ({ trades: [t, ...s.trades].slice(0, 400) })),
   patchTrade: (id, patch) => set(s => ({ trades: s.trades.map(t => t.id === id ? { ...t, ...patch } : t) })),
   addPosition: p => set(s => ({ positions: [...s.positions, p] })),
@@ -350,18 +380,14 @@ export const useStore = create<AppState>()((set, get) => ({
     AuditLogger[v ? 'warn' : 'info']('USER', v ? 'First live order pre-authorized by user' : 'Live order pre-authorization revoked')
   },
   setTradingMode: m => {
-    // Rebase daily-loss / drawdown baselines to the new mode's equity basis —
-    // otherwise the paper↔live equity jump would instantly trip the guards.
+    // Parallel pipelines: BOTH paper and live engines run continuously with
+    // their own ledgers and risk baselines. This toggle is now a pure VIEW
+    // filter — no baseline rebase, no pause clearing, nothing operational.
     const s = get()
-    const basis = m === 'live' && s.brokerPortfolio && s.brokerPortfolio.totalUsd > 0
-      ? s.brokerPortfolio.totalUsd
-      : computeEquity({ cash: s.cash, positions: s.positions, assets: s.assets })
-    // Rebasing invalidates any pause computed against the OLD baselines —
-    // clear it so a phantom breach can't outlive the basis switch.
-    set({ tradingMode: m, dayStartEquity: basis, peakEquity: basis, dayStamp: new Date().toDateString(), autoPaused: false, pauseReason: '' })
-    AuditLogger[m === 'live' ? 'warn' : 'info']('USER',
-      m === 'live' ? 'Trading mode switched to LIVE' : 'Trading mode switched to PAPER',
-      `Risk baselines rebased to ${basis.toFixed(2)} USD (${m === 'live' ? 'real account' : 'paper ledger'}).`)
+    const st = s.engineByMode[m]
+    set({ tradingMode: m, engineMode: st.mode, engineNote: st.note, lastConfidence: st.confidence })
+    AuditLogger.info('USER', `View switched to ${m.toUpperCase()} mode`,
+      'Both pipelines keep running; all tabs now show only this mode\'s activity.')
   },
 
   setKillSwitch: v => {
@@ -373,12 +399,18 @@ export const useStore = create<AppState>()((set, get) => ({
     AuditLogger.info('ADMIN', v ? 'Admin approved live trading request' : 'Admin revoked live trading approval')
   },
 
-  resetDemo: () => set({
-    cash: START_CASH, dayStartEquity: START_CASH, peakEquity: START_CASH,
-    dayStamp: new Date().toDateString(), positions: [], trades: [], perf: [], audit: [],
-    autoTrading: false, emergencyStop: false, autoPaused: false, pauseReason: '',
-    engineMode: 'Cash / Risk-Off', engineNote: 'Engine reset.', lastConfidence: 0
-  })
+  resetDemo: () => set(s => ({
+    // Paper-side reset ONLY: live trades, positions, and perf are real
+    // account records and must survive a demo reset.
+    cash: START_CASH, paperDayStart: START_CASH, paperPeak: START_CASH,
+    positions: s.positions.filter(p => (p.broker ?? 'paper') !== 'paper'),
+    trades: s.trades.filter(t => t.broker !== 'paper'),
+    perf: s.perf.filter(p => p.live),
+    engineByMode: { ...s.engineByMode, paper: { mode: 'Cash / Risk-Off', note: 'Paper engine reset.', confidence: 0 } },
+    ...(s.tradingMode === 'paper'
+      ? { engineMode: 'Cash / Risk-Off' as StrategyName, engineNote: 'Paper engine reset.', lastConfidence: 0 }
+      : {})
+  }))
 }))
 
 // Route every AuditLogger event into the store
@@ -390,6 +422,41 @@ useStore.subscribe(() => {
   if (saveTimer) return
   saveTimer = setTimeout(() => { saveTimer = null; persistNow(useStore.getState()) }, 1000)
 })
+
+// ---------- parallel-mode view filters ----------
+// Paper and live pipelines run simultaneously; the tradingMode toggle only
+// selects which one every tab DISPLAYS. All filtering derives from record
+// tags: Trade.broker / Position.broker ('paper' vs real) and PerfPoint.live.
+
+export function modeOfBroker(broker: BrokerId | undefined): TradingMode {
+  return (broker ?? 'paper') === 'paper' ? 'paper' : 'live'
+}
+
+export function visibleTrades(s: Pick<AppState, 'trades' | 'tradingMode'>): Trade[] {
+  return s.trades.filter(t => modeOfBroker(t.broker) === s.tradingMode)
+}
+
+export function visiblePositions(s: Pick<AppState, 'positions' | 'tradingMode'>): Position[] {
+  return s.positions.filter(p => modeOfBroker(p.broker) === s.tradingMode)
+}
+
+export function visiblePerf(s: Pick<AppState, 'perf' | 'tradingMode'>): PerfPoint[] {
+  return s.perf.filter(p => (p.live ?? false) === (s.tradingMode === 'live'))
+}
+
+/** Paper-ledger equity: cash + paper positions only. */
+export function paperEquity(s: Pick<AppState, 'cash' | 'positions' | 'assets'>): number {
+  const priceOf = (sym: string) => s.assets.find(a => a.symbol === sym)?.price ?? 0
+  return s.cash + s.positions
+    .filter(p => modeOfBroker(p.broker) === 'paper')
+    .reduce((acc, p) => acc + positionValue(p, priceOf(p.symbol)), 0)
+}
+
+/** Equity of the currently VIEWED mode (live → real broker account). */
+export function visibleEquity(s: Pick<AppState, 'cash' | 'positions' | 'assets' | 'tradingMode' | 'brokerPortfolio'>): number {
+  if (s.tradingMode === 'live') return s.brokerPortfolio?.totalUsd ?? 0
+  return paperEquity(s)
+}
 
 // ---------- derived helpers ----------
 export function positionValue(p: Position, price: number): number {

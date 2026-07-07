@@ -118,6 +118,17 @@ export interface Position {
   strategy: StrategyName
   confidence: number
   openedAt: number
+  /** Venue that holds this position ('paper' = paper ledger, else real broker).
+   *  Optional for workspaces persisted before parallel paper/live mode;
+   *  loadWorkspace backfills it from the owning trade. */
+  broker?: BrokerId
+}
+
+/** Per-pipeline engine status (paper and live run in parallel). */
+export interface EngineStatus {
+  mode: StrategyName
+  note: string
+  confidence: number
 }
 
 export type AuditCategory = 'MARKET' | 'STRATEGY' | 'RISK' | 'ORDER' | 'BROKER' | 'SYSTEM' | 'USER' | 'ADMIN'

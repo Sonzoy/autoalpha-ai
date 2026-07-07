@@ -7,10 +7,10 @@ import { IBKRBrokerAdapter } from './brokers/IBKRBrokerAdapter'
 import { EToroBrokerAdapter } from './brokers/EToroBrokerAdapter'
 import { BinanceBrokerAdapter } from './brokers/BinanceBrokerAdapter'
 import type { BrokerAdapter } from './brokers/BrokerAdapter'
-import type { AssetState, BrokerId, Position, PriceSource, Trade } from '../types'
+import type { AssetState, BrokerId, IntelSnapshot, Position, PriceSource, Trade } from '../types'
 import { MarketDataService } from './MarketDataService'
 import { freshWsQuotes, startStream } from './LiveStream'
-import { computeEquity, positionPnl, positionValue, useStore } from '../store/store'
+import { positionPnl, positionValue, useStore } from '../store/store'
 
 /**
  * TradingEngine — the orchestrator. Each tick:
@@ -36,17 +36,19 @@ export function liveAdapter(): BrokerAdapter | null {
   return null
 }
 
-function activeBrokerHealthy(): boolean {
-  return useStore.getState().tradingMode === 'live' ? !!liveAdapter() : brokers.paper.healthy()
+/** Real-account equity, or null when no synced broker portfolio exists. */
+function liveEquity(): number | null {
+  const s = useStore.getState()
+  return s.brokerPortfolio && s.brokerPortfolio.totalUsd > 0 ? s.brokerPortfolio.totalUsd : null
 }
 
-function equityBasis(assets: AssetState[]): { equity: number; live: boolean } {
+/** Paper-ledger equity: cash + paper-tagged positions only. */
+function paperEq(assets: AssetState[]): number {
   const s = useStore.getState()
-  const live = s.tradingMode === 'live' && !!s.brokerPortfolio && s.brokerPortfolio.totalUsd > 0
-  return {
-    equity: live ? s.brokerPortfolio!.totalUsd : computeEquity({ cash: s.cash, positions: s.positions, assets }),
-    live
-  }
+  const priceOf = (sym: string) => assets.find(a => a.symbol === sym)?.price ?? 0
+  return s.cash + s.positions
+    .filter(p => (p.broker ?? 'paper') === 'paper')
+    .reduce((acc, p) => acc + positionValue(p, priceOf(p.symbol)), 0)
 }
 
 let sim: MarketSimulator | null = null
@@ -193,12 +195,12 @@ async function tick(): Promise<void> {
   const intel = { ...simulator.intel }
   useStore.getState().setMarket(assets, intel, simulator.globalRegime())
 
-  // Day roll
+  // Day roll — both pipelines get fresh daily baselines
   if (new Date().toDateString() !== st.dayStamp) {
     simulator.rollDay()
-    const eq = equityBasis(assets).equity
-    useStore.getState().rollDay(eq)
-    AuditLogger.info('SYSTEM', 'New trading day — daily P&L counters reset')
+    useStore.getState().rollDay(liveEquity() ?? paperEq(assets))
+    useStore.getState().rollPaperDay(paperEq(assets))
+    AuditLogger.info('SYSTEM', 'New trading day — daily P&L counters reset (paper + live)')
   }
 
   // 3. Manage open positions (stops / targets / trailing / time exit)
@@ -272,83 +274,126 @@ async function tick(): Promise<void> {
     if (closeReason) await closePosition(pos, price, closeReason)
   }
 
-  // 4. Equity, peak, perf, portfolio guards.
-  // In live mode with a synced real account, ALL of these run on the REAL
-  // account value — the risk guards protect actual money, and the equity
-  // curve shows the actual account. The paper ledger is used only in paper mode.
+  // 4. Equity, peaks, perf, portfolio guards — PER PIPELINE.
+  // Paper and live run in parallel with separate ledgers and baselines. The
+  // guards (daily loss / drawdown → auto-pause) protect only REAL money:
+  // autoPaused blocks the LIVE pipeline; paper is a test sandbox and keeps
+  // running so strategies can be evaluated through drawdowns.
   {
+    const pEq = paperEq(assets)
+    const lEq = liveEquity()
+
+    // Paper baselines: track independently (rebase if migration left stale values)
     const s = useStore.getState()
-    const { equity, live } = equityBasis(assets)
+    if (pEq > 0 && (s.paperDayStart > pEq * 3 || s.paperDayStart < pEq / 3)) useStore.getState().rollPaperDay(pEq)
+    if (pEq > useStore.getState().paperPeak * 3 || pEq < useStore.getState().paperPeak / 3) useStore.getState().setPaperPeak(pEq)
+    if (pEq > useStore.getState().paperPeak) useStore.getState().setPaperPeak(pEq)
+    const sp = useStore.getState()
+    useStore.getState().pushPerf({
+      ts: Date.now(), equity: pEq,
+      drawdown: round2(sp.paperPeak > 0 ? ((pEq - sp.paperPeak) / sp.paperPeak) * 100 : 0),
+      dailyPnl: round2(pEq - sp.paperDayStart), live: false
+    })
 
-    // Baseline sanity: when the equity basis switches (paper ledger ↔ real
-    // broker account) the stored baselines can be orders of magnitude off —
-    // e.g. paper $100k dayStart vs real $208 equity reads as a "-99.79% daily
-    // loss" and falsely trips the guards. A >3x divergence cannot be a real
-    // intraday move on this account; rebase instead of "breaching".
-    if (equity > 0 && (s.dayStartEquity > equity * 3 || s.dayStartEquity < equity / 3 ||
-      s.peakEquity > equity * 3 || s.peakEquity < equity / 3)) {
-      useStore.getState().rollDay(equity)
-      useStore.getState().setPeak(equity)
-      AuditLogger.info('RISK', 'Risk baselines rebased — equity basis changed',
-        `Stored baselines (day ${s.dayStartEquity.toFixed(2)}, peak ${s.peakEquity.toFixed(2)}) diverged >3x from current ${live ? 'real account' : 'paper'} equity ${equity.toFixed(2)}. Guards now measure against the current basis.`)
-    }
+    // Live baselines + guards: only when a real account is synced
+    if (lEq !== null) {
+      const s1 = useStore.getState()
+      // Baseline sanity: stored baselines can be orders of magnitude off after
+      // a basis change (e.g. paper $100k dayStart vs real $208). A >3x
+      // divergence cannot be a real intraday move; rebase instead of "breaching".
+      if (s1.dayStartEquity > lEq * 3 || s1.dayStartEquity < lEq / 3 ||
+        s1.peakEquity > lEq * 3 || s1.peakEquity < lEq / 3) {
+        useStore.getState().rollDay(lEq)
+        useStore.getState().setPeak(lEq)
+        AuditLogger.info('RISK', 'Live risk baselines rebased — equity basis changed',
+          `Stored baselines (day ${s1.dayStartEquity.toFixed(2)}, peak ${s1.peakEquity.toFixed(2)}) diverged >3x from real account equity ${lEq.toFixed(2)}.`)
+      }
+      if (lEq > useStore.getState().peakEquity) useStore.getState().setPeak(lEq)
+      const s2 = useStore.getState()
+      useStore.getState().pushPerf({
+        ts: Date.now(), equity: lEq,
+        drawdown: round2(s2.peakEquity > 0 ? ((lEq - s2.peakEquity) / s2.peakEquity) * 100 : 0),
+        dailyPnl: round2(lEq - s2.dayStartEquity), live: true
+      })
 
-    if (equity > useStore.getState().peakEquity) useStore.getState().setPeak(equity)
-    const s2 = useStore.getState()
-    const drawdown = s2.peakEquity > 0 ? ((equity - s2.peakEquity) / s2.peakEquity) * 100 : 0
-    const dailyPnl = equity - s2.dayStartEquity
-    useStore.getState().pushPerf({ ts: Date.now(), equity, drawdown: round2(drawdown), dailyPnl: round2(dailyPnl), live })
-
-    // Self-heal a stale risk pause: if NO guard breaches against the CURRENT
-    // baselines (they were rebased, or a new day started), the pause describes
-    // a state that no longer exists — clear it. A real daily-loss pause stays
-    // in force for the rest of that day; a drawdown pause clears only once
-    // equity recovers inside the threshold.
-    if (s2.autoPaused && RiskManager.portfolioGuards(riskCtx(equity)) === null) {
-      useStore.getState().resumeTrading()
-      AuditLogger.info('RISK', 'Stale risk pause auto-cleared',
-        `The recorded breach ("${s2.pauseReason}") no longer holds against current baselines (equity ${equity.toFixed(2)}, day start ${s2.dayStartEquity.toFixed(2)}, peak ${s2.peakEquity.toFixed(2)}).`)
-    }
-
-    const s3 = useStore.getState()
-    if (s3.autoTrading && !s3.autoPaused) {
-      const guard = RiskManager.portfolioGuards(riskCtx(equity))
-      if (guard) {
-        useStore.getState().pauseTrading(guard)
-        useStore.getState().setAutoTrading(false)
+      // Self-heal a stale risk pause; a real breach stays in force.
+      if (s2.autoPaused && RiskManager.portfolioGuards(riskCtx('live', lEq)) === null) {
+        useStore.getState().resumeTrading()
+        AuditLogger.info('RISK', 'Stale live risk pause auto-cleared',
+          `The recorded breach ("${s2.pauseReason}") no longer holds against current baselines (equity ${lEq.toFixed(2)}).`)
+      }
+      const s3 = useStore.getState()
+      if (s3.autoTrading && !s3.autoPaused) {
+        const guard = RiskManager.portfolioGuards(riskCtx('live', lEq))
+        // Pause the LIVE pipeline only — paper keeps testing strategies.
+        if (guard) useStore.getState().pauseTrading(guard)
       }
     }
   }
 
-  // 5–10. Propose → risk check → preview → execute → fill → audit
+  // 5–10. Propose → risk check → preview → execute → fill → audit.
+  // BOTH pipelines run every cycle: paper (test sandbox, shorts allowed) and
+  // live (real broker, long-only on spot). Each has its own ledger, pacing,
+  // and engine status; the UI's mode toggle only selects which one to VIEW.
   ticksSinceTrade++
   const s = useStore.getState()
-  // Clear a stale "broker unhealthy" note once the link has recovered
-  // (unconditional — the note must never outlive the condition it describes)
-  if (activeBrokerHealthy() && s.engineNote.startsWith('Broker link unhealthy')) {
-    useStore.getState().setEngineStatus(s.engineMode, 'Scanning for qualified setups.', s.lastConfidence)
-  }
-  if (!s.autoTrading || s.autoPaused || s.emergencyStop || s.killSwitch) return
+  if (!s.autoTrading || s.emergencyStop || s.killSwitch) return
   if (ticksSinceTrade < 5 || Math.random() > 0.45) return
-  // Entry pacing: at the old ~15s minimum spacing the engine averaged ~21
-  // trades/day — ~4%/day of round-trip commission drag on its own. Backtest
-  // (30d, 8 pairs): 2h spacing more than halved the compounded loss vs
-  // unthrottled; every fold agreed. Quality over quantity.
-  {
-    const ENTRY_SPACING_MS = 2 * 3600_000
-    const lastEntry = s.trades.reduce((m, t) =>
-      (t.status === 'Filled' || t.status === 'Closed') && t.openedAt > m ? t.openedAt : m, 0)
-    const wait = ENTRY_SPACING_MS - (Date.now() - lastEntry)
-    if (wait > 0) {
-      useStore.getState().setEngineStatus(s.engineMode,
-        `Entry pacing: next entry window opens in ${Math.ceil(wait / 60000)} min (2h spacing keeps commission drag survivable).`, s.lastConfidence)
+
+  await proposeFor('paper', assets, intel)
+  await proposeFor('live', assets, intel)
+}
+
+const MODE_TAG: Record<'paper' | 'live', string> = { paper: '[PAPER]', live: '[LIVE]' }
+
+/** One pipeline's proposal pass. Everything is scoped to `pipeline`:
+ *  equity basis, positions, pacing, venue rules, and engine status. */
+async function proposeFor(pipeline: 'paper' | 'live', assets: AssetState[], intel: Record<string, IntelSnapshot>): Promise<void> {
+  const s = useStore.getState()
+  const status = (mode: Parameters<typeof s.setEngineStatusFor>[1], note: string, conf: number) =>
+    useStore.getState().setEngineStatusFor(pipeline, mode, note, conf)
+  const tag = MODE_TAG[pipeline]
+  const priceOf = (sym: string) => assets.find(a => a.symbol === sym)?.price ?? 0
+
+  // Pipeline prerequisites
+  const realBroker = liveAdapter()
+  if (pipeline === 'live') {
+    if (s.autoPaused) return // risk pause protects real money; paper unaffected
+    const liveReady = s.liveUnlocked && s.adminApprovedLive && !!realBroker && s.firstLiveOrderAuthorized
+    if (!liveReady) {
+      status('Cash / Risk-Off', !realBroker
+        ? 'Live pipeline idle: no healthy real broker connected.'
+        : 'Live pipeline idle: unlock chain incomplete (compliance approval + first-order authorization required).', 0)
       return
     }
-  }
-  // Don't generate proposals while the broker link is unhealthy — wait for recovery
-  if (!activeBrokerHealthy()) {
-    useStore.getState().setEngineStatus(s.engineMode, 'Broker link unhealthy — holding new proposals until connection recovers.', 0)
+    if (liveEquity() === null) {
+      status('Cash / Risk-Off', 'Live pipeline idle: waiting for the first real account sync from the broker.', 0)
+      return
+    }
+  } else if (!brokers.paper.healthy()) {
+    status('Cash / Risk-Off', 'Paper venue connecting…', 0)
     return
+  }
+
+  const equity = pipeline === 'live' ? liveEquity()! : paperEq(assets)
+  const myPositions = s.positions.filter(p => (p.broker ?? 'paper') === 'paper' ? pipeline === 'paper' : pipeline === 'live')
+
+  // Entry pacing (per pipeline): at the old ~15s minimum spacing the engine
+  // averaged ~21 trades/day — ~4%/day of commission drag. Backtest (30d,
+  // 8 pairs): 2h spacing more than halved the compounded loss; all folds agreed.
+  {
+    const ENTRY_SPACING_MS = 2 * 3600_000
+    const lastEntry = s.trades.reduce((m, t) => {
+      const tm = t.broker === 'paper' ? 'paper' : 'live'
+      return tm === pipeline && (t.status === 'Filled' || t.status === 'Closed') && t.openedAt > m ? t.openedAt : m
+    }, 0)
+    const wait = ENTRY_SPACING_MS - (Date.now() - lastEntry)
+    if (wait > 0) {
+      status(useStore.getState().engineByMode[pipeline].mode,
+        `Entry pacing: next entry window opens in ${Math.ceil(wait / 60000)} min (2h spacing keeps commission drag survivable).`,
+        useStore.getState().engineByMode[pipeline].confidence)
+      return
+    }
   }
 
   // Live-data-only policy: never open trades on simulated prices unless the
@@ -356,44 +401,36 @@ async function tick(): Promise<void> {
   let tradable = s.liveDataOnly
     ? assets.filter(a => (s.assetSources[a.symbol] ?? 'simulated') !== 'simulated')
     : assets
-  // Live venue restriction: only propose on pairs the connected real broker can
-  // actually route (e.g. Binance spot = BTC/ETH/SOL). This prevents unfillable
-  // proposals — and the redundant "unmapped pair" rejection records they create
-  // — for live-priced assets the broker doesn't support (e.g. FX on Binance).
-  const liveVenue = s.tradingMode === 'live' ? liveAdapter() : null
+  // Venue restriction (live only): only pairs the real broker can route.
+  const liveVenue = pipeline === 'live' ? realBroker : null
   if (liveVenue?.supportsSymbol) tradable = tradable.filter(a => liveVenue.supportsSymbol!(a.symbol))
   if (s.liveDataOnly && tradable.filter(a => s.profile.markets.includes(a.market)).length === 0) {
-    useStore.getState().setEngineStatus('Cash / Risk-Off',
+    status('Cash / Risk-Off',
       liveVenue?.supportsSymbol
-        ? `No tradable pairs: your ${liveVenue.name} account supports only its listed spot pairs (crypto), and none of those are in your selected markets. Add Crypto in your profile, or connect a broker that covers these markets.`
+        ? `No tradable pairs: your ${liveVenue.name} account supports only its listed spot pairs (crypto), and none of those are in your selected markets.`
         : 'Live-data-only policy: no live-priced assets in your selected markets yet. Crypto & FX feeds are automatic; add a Finnhub key or custom feeds for stocks/ETFs (Market Intel page).', 0)
     return
   }
 
-  // Spot-only live venue (e.g. Binance spot) cannot short — tell the selector
-  // to skip short signals so it never wastes a cycle on an unfillable proposal.
-  const longOnly = s.tradingMode === 'live' && liveAdapter()?.canShort === false
+  // Shorts: paper venue supports them (fully collateralized); live spot cannot.
+  const longOnly = pipeline === 'live' && realBroker?.canShort === false
   const selection = StrategySelector.select(tradable, intel, {
     markets: s.profile.markets, riskProfile: s.profile.riskProfile,
-    settings: s.settings, positions: s.positions, longOnly
+    settings: s.settings, positions: myPositions, longOnly
   })
 
   if (!selection.proposal) {
-    useStore.getState().setEngineStatus(selection.mode, selection.note, 0)
-    if (selection.mode === 'Cash / Risk-Off') AuditLogger.info('STRATEGY', 'Engine in Cash / Risk-Off mode', selection.note)
+    status(selection.mode, selection.note, 0)
     return
   }
 
   const prop = selection.proposal
-  useStore.getState().setEngineStatus(prop.strategy, selection.note, prop.confidence)
+  status(prop.strategy, selection.note, prop.confidence)
 
-  const { equity } = equityBasis(assets)
   const price = priceOf(prop.symbol)
   if (!price) return
-  // Small-account sizing floor: the profile's base allocation (e.g. 5%) can
-  // size below the minimum trade on small real accounts even when the user's
-  // cap allows more. Lift the allocation toward the cap so orders clear the
-  // floor with ~30% headroom instead of standing aside forever.
+  // Small-account sizing floor: lift allocation so orders clear the minimum
+  // trade size with ~30% headroom instead of standing aside forever.
   {
     const minTradeF = s.settings.minTradeUsd ?? 0
     const floorPct = equity > 0 && minTradeF > 0 ? (minTradeF * 1.3 / equity) * 100 : 0
@@ -401,62 +438,54 @@ async function tick(): Promise<void> {
       prop.allocationPct = Math.round(floorPct * 10) / 10
     }
   }
-  // Live mode with a synced real account: size orders from REAL equity.
   const qty = roundQty((equity * prop.allocationPct / 100) / price)
   const orderValue = qty * price
 
-  // Dust protection: skip sub-scale orders. This is a routine "stand aside"
-  // decision, not a trade — surface it as engine status only. Persisting a
-  // Rejected record every cycle just produced redundant log noise (the exact
-  // symptom of the old 400 identical rejections).
+  // Dust protection: routine stand-aside, engine status only.
   const minTrade = s.settings.minTradeUsd ?? 0
   if (orderValue < minTrade) {
-    useStore.getState().setEngineStatus(prop.strategy,
-      `Best setup (${prop.symbol}) sizes to ${orderValue.toFixed(2)} USD — below your ${minTrade} USD minimum trade size. Raise max allocation % (Risk Management) or add funds. Holding.`,
+    status(prop.strategy,
+      `Best setup (${prop.symbol}) sizes to ${orderValue.toFixed(2)} USD — below your ${minTrade} USD minimum trade size. Holding.`,
       prop.confidence)
     return
   }
 
-  // Portfolio-capacity gate: when the target market is already at its
-  // correlated-exposure cap, no new proposal there can pass risk. That's a
-  // routine "portfolio full" state — surface it as engine status instead of
-  // persisting an identical Rejected record every few seconds (log spam).
+  // Portfolio-capacity gate (per pipeline's own positions).
   {
-    const sameMkt = useStore.getState().positions.filter(x => x.market === prop.market)
+    const sameMkt = myPositions.filter(x => x.market === prop.market)
     const mktAllocPct = sameMkt.reduce((a, x) => a + (x.qty * x.entryPrice / Math.max(equity, 1)) * 100, 0)
     if (mktAllocPct + prop.allocationPct > MARKET_EXPOSURE_CAP_PCT + 1e-6) {
-      useStore.getState().setEngineStatus(prop.strategy,
-        `${prop.market} at capacity: ${mktAllocPct.toFixed(1)}% deployed across ${sameMkt.length} position(s) vs ${MARKET_EXPOSURE_CAP_PCT}% cap. Best setup (${prop.symbol}) waits for a position to close.`,
+      status(prop.strategy,
+        `${prop.market} at capacity: ${mktAllocPct.toFixed(1)}% deployed across ${sameMkt.length} position(s) vs ${MARKET_EXPOSURE_CAP_PCT}% cap.`,
         prop.confidence)
       return
     }
   }
 
-  // Liquidity gate (live): a fully deployed account has ~no free stablecoin
-  // left — new buys would only bounce off the broker with "insufficient USDT".
-  // Routine state, not an error: engine status, no Rejected record.
-  if (s.tradingMode === 'live' && s.brokerPortfolio) {
+  // Liquidity gate (live only): don't bounce orders off an empty stable balance.
+  if (pipeline === 'live' && s.brokerPortfolio) {
     const STABLE_SET = ['USDT', 'USDC', 'FDUSD', 'BUSD', 'DAI', 'TUSD']
     const freeStable = s.brokerPortfolio.balances
       .filter(b => STABLE_SET.includes(b.asset)).reduce((a, b) => a + (b.usd ?? 0), 0)
     const plannedValue = equity * prop.allocationPct / 100
     if (plannedValue > freeStable * 0.98) {
-      useStore.getState().setEngineStatus(prop.strategy,
-        `Fully deployed: ${freeStable.toFixed(2)} USDT free vs ~${plannedValue.toFixed(2)} needed for the next order (${prop.symbol}). Waiting for a position to close.`,
+      status(prop.strategy,
+        `Fully deployed: ${freeStable.toFixed(2)} USDT free vs ~${plannedValue.toFixed(2)} needed for the next order (${prop.symbol}).`,
         prop.confidence)
       return
     }
   }
 
-  AuditLogger.info('STRATEGY', `Proposal: ${prop.direction} ${prop.symbol} via ${prop.strategy} (confidence ${prop.confidence})`, prop.rationale)
-  const decision = RiskManager.check(prop, riskCtx(equity))
+  AuditLogger.info('STRATEGY', `${tag} Proposal: ${prop.direction} ${prop.symbol} via ${prop.strategy} (confidence ${prop.confidence})`, prop.rationale)
+  const decision = RiskManager.check(prop, riskCtx(pipeline, equity, myPositions))
   const stopLoss = prop.direction === 'Long' ? price * (1 - prop.stopLossPct / 100) : price * (1 + prop.stopLossPct / 100)
   const takeProfit = prop.direction === 'Long' ? price * (1 + prop.takeProfitPct / 100) : price * (1 - prop.takeProfitPct / 100)
 
+  const adapter = pipeline === 'live' && realBroker ? realBroker : brokers.paper
   const trade: Trade = {
     id: `tr-${Date.now()}-${Math.floor(Math.random() * 1e4)}`,
     symbol: prop.symbol, market: prop.market,
-    broker: s.tradingMode === 'live' ? (liveAdapter()?.id ?? 'paper') : 'paper',
+    broker: adapter.id,
     direction: prop.direction, entryPrice: price, qty,
     stopLoss: round4(stopLoss), takeProfit: round4(takeProfit),
     pnl: 0, strategy: prop.strategy, confidence: prop.confidence,
@@ -467,69 +496,51 @@ async function tick(): Promise<void> {
 
   if (!decision.approved) {
     useStore.getState().patchTrade(trade.id, { status: 'Rejected', closeReason: decision.summary })
-    AuditLogger.warn('RISK', `Trade rejected: ${prop.symbol}`, decision.summary)
+    AuditLogger.warn('RISK', `${tag} Trade rejected: ${prop.symbol}`, decision.summary)
     return
   }
   useStore.getState().patchTrade(trade.id, { status: 'Approved' })
-  AuditLogger.info('RISK', `Trade approved: ${prop.symbol}`, decision.summary)
+  AuditLogger.info('RISK', `${tag} Trade approved: ${prop.symbol}`, decision.summary)
 
-  // Adapter routing: live mode routes to a healthy real broker (IBKR gateway
-  // preferred, then Binance spot) only when the full chain is satisfied —
-  // mode=live, unlock chain complete, and explicit first-order authorization.
-  const realBroker = liveAdapter()
-  const liveReady = s.tradingMode === 'live' && s.liveUnlocked && s.adminApprovedLive && !!realBroker
-  if (s.tradingMode === 'live' && !liveReady) {
-    useStore.getState().patchTrade(trade.id, { status: 'Rejected', closeReason: 'Live mode selected but live routing prerequisites are not met (unlock chain + a healthy connected broker required).' })
-    AuditLogger.warn('ORDER', `Live order blocked: ${prop.symbol}`, 'Unlock chain incomplete or no healthy real broker.')
-    return
-  }
-  if (liveReady && !s.firstLiveOrderAuthorized) {
-    useStore.getState().patchTrade(trade.id, { status: 'Rejected', closeReason: 'First live order requires explicit pre-authorization (Brokers page).' })
-    AuditLogger.warn('ORDER', `Live order held: ${prop.symbol}`, 'User has not pre-authorized the first live order.')
-    return
-  }
-  const adapter = liveReady && realBroker ? realBroker : brokers.paper
   const preview = adapter.previewOrder({
     symbol: prop.symbol, market: prop.market, direction: prop.direction,
-    qty, refPrice: price, stopLoss, takeProfit, mode: s.tradingMode
+    qty, refPrice: price, stopLoss, takeProfit, mode: pipeline
   }, useStore.getState().cash)
 
   if (!preview.ok) {
     useStore.getState().patchTrade(trade.id, { status: 'Rejected', closeReason: preview.note })
-    AuditLogger.warn('ORDER', `Order preview failed: ${prop.symbol}`, preview.note)
+    AuditLogger.warn('ORDER', `${tag} Order preview failed: ${prop.symbol}`, preview.note)
     return
   }
 
   useStore.getState().patchTrade(trade.id, { status: 'Submitted' })
-  AuditLogger.info('ORDER', `Order submitted: ${prop.direction} ${qty} ${prop.symbol}`, preview.note)
+  AuditLogger.info('ORDER', `${tag} Order submitted: ${prop.direction} ${qty} ${prop.symbol}`, preview.note)
   const result = await adapter.placeOrder(preview)
 
   if (!result.ok || !result.fillPrice) {
     useStore.getState().patchTrade(trade.id, { status: 'Rejected', closeReason: result.reason })
-    AuditLogger.error('ORDER', `Order rejected by broker: ${prop.symbol}`, result.reason)
+    AuditLogger.error('ORDER', `${tag} Order rejected by broker: ${prop.symbol}`, result.reason)
     return
   }
 
   const fill = result.fillPrice
   // Ledger must track what the account REALLY holds: the venue's executed
-  // quantity net of base-asset fees — not the requested qty. Otherwise the
-  // eventual close tries to sell more than the free balance and is rejected.
+  // quantity net of base-asset fees — not the requested qty.
   const heldQty = result.filledQty && result.filledQty > 0 ? result.filledQty : qty
   const cost = heldQty * fill + (result.commission ?? 0)
-  // Only the paper ledger tracks cash. For a LIVE fill the real broker account
-  // is authoritative — mutating the in-app cash would be redundant, misleading
-  // bookkeeping that double-counts against the synced balance.
+  // Only the paper ledger tracks cash; the real broker account is authoritative
+  // for live fills (60s portfolio sync reflects them).
   if (adapter.id === 'paper') useStore.getState().setCash(useStore.getState().cash - cost)
   useStore.getState().patchTrade(trade.id, { status: 'Filled', entryPrice: round4(fill), qty: heldQty })
   useStore.getState().addPosition({
     tradeId: trade.id, symbol: prop.symbol, market: prop.market, direction: prop.direction,
-    qty: heldQty, entryPrice: fill,
+    qty: heldQty, entryPrice: fill, broker: adapter.id,
     stopLoss: prop.direction === 'Long' ? fill * (1 - prop.stopLossPct / 100) : fill * (1 + prop.stopLossPct / 100),
     takeProfit: prop.direction === 'Long' ? fill * (1 + prop.takeProfitPct / 100) : fill * (1 - prop.takeProfitPct / 100),
     strategy: prop.strategy, confidence: prop.confidence, openedAt: Date.now()
   })
   ticksSinceTrade = 0
-  AuditLogger.info('ORDER', `Fill confirmed: ${prop.direction} ${qty} ${prop.symbol} @ ${fill.toFixed(4)}`,
+  AuditLogger.info('ORDER', `${tag} Fill confirmed: ${prop.direction} ${qty} ${prop.symbol} @ ${fill.toFixed(4)}`,
     `Stop ${trade.stopLoss}, target ${trade.takeProfit}. ${prop.rationale}`)
 }
 
@@ -578,15 +589,21 @@ async function closePosition(p: Position, price: number, reason: string): Promis
     `P&L ${pnl >= 0 ? '+' : ''}${(pnl - commission).toFixed(2)} USD after commission.`)
 }
 
-function riskCtx(equity: number): RiskContext {
+function riskCtx(pipeline: 'paper' | 'live', equity: number, positions?: Position[]): RiskContext {
   const s = useStore.getState()
   return {
     settings: s.settings, equity,
-    dayStartEquity: s.dayStartEquity, peakEquity: s.peakEquity,
-    positions: s.positions, mode: s.tradingMode,
+    // Per-pipeline baselines: live guards run on the real account, paper on
+    // its own ledger — a $100k paper baseline must never judge a $205 account.
+    dayStartEquity: pipeline === 'live' ? s.dayStartEquity : s.paperDayStart,
+    peakEquity: pipeline === 'live' ? s.peakEquity : s.paperPeak,
+    positions: positions ?? s.positions.filter(p => ((p.broker ?? 'paper') === 'paper') === (pipeline === 'paper')),
+    mode: pipeline,
     liveUnlocked: s.liveUnlocked && s.adminApprovedLive,
-    brokerHealthy: activeBrokerHealthy(),
-    emergencyStop: s.emergencyStop, killSwitch: s.killSwitch, autoPaused: s.autoPaused
+    brokerHealthy: pipeline === 'live' ? !!liveAdapter() : brokers.paper.healthy(),
+    emergencyStop: s.emergencyStop, killSwitch: s.killSwitch,
+    // autoPaused protects the LIVE pipeline; paper keeps testing through pauses
+    autoPaused: pipeline === 'live' ? s.autoPaused : false
   }
 }
 

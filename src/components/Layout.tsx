@@ -79,7 +79,7 @@ export default function Layout() {
       <div className="main">
         <header className="topbar">
           <h1>{TITLES[loc.pathname] ?? 'AutoAlpha AI'}</h1>
-          <div className="seg" title="Trading mode">
+          <div className="seg" title="View filter: paper and live pipelines run in parallel; this selects which one all tabs display">
             <button className={tradingMode === 'paper' ? 'active' : ''} onClick={() => switchMode('paper')}>PAPER</button>
             <button className={tradingMode === 'live' ? 'active' : ''} style={tradingMode === 'live' ? { background: 'var(--red)' } : undefined} onClick={() => switchMode('live')}>LIVE</button>
           </div>
@@ -87,7 +87,7 @@ export default function Layout() {
           {remote.active && !serverOk && <Badge tone="red">SERVER UNREACHABLE</Badge>}
           {!brokerOk && <Badge tone="red">{tradingMode === 'live' ? 'Live broker offline' : 'Paper broker offline'}</Badge>}
           {killSwitch && <Badge tone="red">KILL SWITCH</Badge>}
-          {autoPaused && <Badge tone="amber">RISK PAUSED</Badge>}
+          {autoPaused && <Badge tone="amber">LIVE RISK PAUSED</Badge>}
           {emergencyStop && <Badge tone="red">EMERGENCY STOP</Badge>}
           <Badge tone={regimeTone as any}>{regime}</Badge>
           <div className="row" title="AI auto-trading">

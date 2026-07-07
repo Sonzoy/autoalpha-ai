@@ -1,12 +1,15 @@
 import React, { useState } from 'react'
-import { useStore } from '../store/store'
+import { useStore, modeOfBroker } from '../store/store'
 import { Badge, Segmented, fmtTime, fmtUsd, statusTone } from '../components/ui'
 import type { OrderStatus } from '../types'
 
 type Filter = 'All' | OrderStatus
 
 export default function TradeHistory() {
-  const trades = useStore(s => s.trades)
+  const allTrades = useStore(s => s.trades)
+  const tradingMode = useStore(s => s.tradingMode)
+  // Mode filter: history shows only the selected pipeline (paper vs live)
+  const trades = allTrades.filter(t => modeOfBroker(t.broker) === tradingMode)
   const [filter, setFilter] = useState<Filter>('All')
 
   const rows = trades.filter(t => filter === 'All' || t.status === filter)

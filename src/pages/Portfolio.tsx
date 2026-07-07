@@ -1,6 +1,6 @@
 import React from 'react'
 import { Area, AreaChart, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
-import { useStore, computeEquity, positionPnl, positionValue } from '../store/store'
+import { useStore, modeOfBroker, paperEquity, positionPnl, positionValue } from '../store/store'
 import { Badge, fmtTime, fmtUsd } from '../components/ui'
 import type { Market } from '../types'
 
@@ -16,16 +16,21 @@ const pieLabel = (p: any) => (
 
 export default function Portfolio() {
   const cash = useStore(s => s.cash)
-  const positions = useStore(s => s.positions)
+  const allPositions = useStore(s => s.positions)
   const assets = useStore(s => s.assets)
-  const trades = useStore(s => s.trades)
-  const perf = useStore(s => s.perf)
+  const allTrades = useStore(s => s.trades)
+  const allPerf = useStore(s => s.perf)
   const audit = useStore(s => s.audit)
   const tradingMode = useStore(s => s.tradingMode)
   const brokerPortfolio = useStore(s => s.brokerPortfolio)
 
+  // Mode filter: this page shows only the selected pipeline's records
+  const positions = allPositions.filter(p => modeOfBroker(p.broker) === tradingMode)
+  const trades = allTrades.filter(t => modeOfBroker(t.broker) === tradingMode)
+  const perf = allPerf.filter(p => (p.live ?? false) === (tradingMode === 'live'))
+
   const priceOf = (sym: string) => assets.find(a => a.symbol === sym)?.price ?? 0
-  const equity = computeEquity({ cash, positions, assets })
+  const equity = paperEquity({ cash, positions: allPositions, assets })
   const liveAcct = tradingMode === 'live' && brokerPortfolio && brokerPortfolio.totalUsd > 0
   const displayedEquity = liveAcct ? brokerPortfolio!.totalUsd : equity
   const closed = trades.filter(t => t.status === 'Closed')

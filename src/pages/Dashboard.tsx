@@ -1,17 +1,19 @@
 import React from 'react'
 import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { Bot, PauseCircle } from 'lucide-react'
-import { useStore, computeEquity, positionPnl, realizedWinRateFor, START_CASH } from '../store/store'
+import { useStore, modeOfBroker, paperEquity, positionPnl, realizedWinRateFor, START_CASH } from '../store/store'
 import { Badge, Meter, Segmented, fmtPct, fmtUsd, fmtTime, statusTone } from '../components/ui'
 
 export default function Dashboard() {
   const cash = useStore(s => s.cash)
-  const positions = useStore(s => s.positions)
+  const allPositions = useStore(s => s.positions)
   const assets = useStore(s => s.assets)
-  const trades = useStore(s => s.trades)
-  const perf = useStore(s => s.perf)
-  const dayStartEquity = useStore(s => s.dayStartEquity)
-  const peakEquity = useStore(s => s.peakEquity)
+  const allTrades = useStore(s => s.trades)
+  const allPerf = useStore(s => s.perf)
+  const dayStartLive = useStore(s => s.dayStartEquity)
+  const peakLive = useStore(s => s.peakEquity)
+  const paperDayStart = useStore(s => s.paperDayStart)
+  const paperPeak = useStore(s => s.paperPeak)
   const engineMode = useStore(s => s.engineMode)
   const engineNote = useStore(s => s.engineNote)
   const lastConfidence = useStore(s => s.lastConfidence)
@@ -27,7 +29,17 @@ export default function Dashboard() {
   const brokerPortfolio = useStore(s => s.brokerPortfolio)
   const liveAcct = tradingMode === 'live' && brokerPortfolio && brokerPortfolio.totalUsd > 0
 
-  const equity = computeEquity({ cash, positions, assets })
+  // Mode filter: paper and live pipelines run in parallel; every widget on
+  // this page shows only the currently selected mode's records.
+  const positions = allPositions.filter(p => modeOfBroker(p.broker) === tradingMode)
+  const trades = allTrades.filter(t => modeOfBroker(t.broker) === tradingMode)
+  const perf = allPerf.filter(p => (p.live ?? false) === (tradingMode === 'live'))
+  const dayStartEquity = tradingMode === 'live' ? dayStartLive : paperDayStart
+  const peakEquity = tradingMode === 'live' ? peakLive : paperPeak
+
+  const equity = tradingMode === 'live'
+    ? (brokerPortfolio?.totalUsd ?? 0)
+    : paperEquity({ cash, positions: allPositions, assets })
   const dailyPnl = equity - dayStartEquity
   const dailyPct = dayStartEquity ? (dailyPnl / dayStartEquity) * 100 : 0
   const totalPct = ((equity - START_CASH) / START_CASH) * 100
@@ -48,9 +60,9 @@ export default function Dashboard() {
 
   return (
     <div className="grid" style={{ gap: 16 }}>
-      {autoPaused && (
+      {autoPaused && tradingMode === 'live' && (
         <div className="disclaimer-box row spread wrap">
-          <span><PauseCircle size={14} style={{ verticalAlign: -2 }} /> <strong>Risk engine pause:</strong> {pauseReason}</span>
+          <span><PauseCircle size={14} style={{ verticalAlign: -2 }} /> <strong>Live risk pause</strong> (paper keeps running): {pauseReason}</span>
           <button className="btn sm" onClick={resumeTrading}>Acknowledge & resume</button>
         </div>
       )}

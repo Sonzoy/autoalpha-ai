@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { useStore, confidenceCalibration } from '../store/store'
+import { useStore, confidenceCalibration, modeOfBroker } from '../store/store'
 import { Badge, fmtTime, fmtUsd, statusTone } from '../components/ui'
 import type { Trade } from '../types'
 
@@ -12,7 +12,10 @@ const STRATEGIES = [
 ]
 
 export default function StrategyEngine() {
-  const trades = useStore(s => s.trades)
+  const allTrades = useStore(s => s.trades)
+  const tradingMode = useStore(s => s.tradingMode)
+  // Mode filter: decisions and calibration reflect only the viewed pipeline
+  const trades = allTrades.filter(t => modeOfBroker(t.broker) === tradingMode)
   const engineMode = useStore(s => s.engineMode)
   const engineNote = useStore(s => s.engineNote)
   const regime = useStore(s => s.regime)

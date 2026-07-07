@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
 import { OctagonX, ShieldCheck, Users } from 'lucide-react'
-import { useStore } from '../store/store'
+import { useStore, modeOfBroker } from '../store/store'
 import { Badge, Modal, Segmented, fmtTime, statusTone } from '../components/ui'
 import type { AuditCategory } from '../types'
 
@@ -11,7 +11,10 @@ export default function Admin() {
   const currentUser = useStore(s => s.currentUser)
   const profile = useStore(s => s.profile)
   const brokerConn = useStore(s => s.brokerConn)
-  const trades = useStore(s => s.trades)
+  const allTrades = useStore(s => s.trades)
+  const tradingMode = useStore(s => s.tradingMode)
+  // Mode filter: admin stats follow the viewed pipeline (paper vs live)
+  const trades = allTrades.filter(t => modeOfBroker(t.broker) === tradingMode)
   const audit = useStore(s => s.audit)
   const autoTrading = useStore(s => s.autoTrading)
   const killSwitch = useStore(s => s.killSwitch)
