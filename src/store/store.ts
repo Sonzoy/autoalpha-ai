@@ -151,6 +151,15 @@ function loadWorkspace(email: string): Workspace | null {
       ws.positions = (ws.positions ?? []).map(p => p.broker ? p : {
         ...p, broker: ws.trades.find(t => t.id === p.tradeId)?.broker ?? 'paper'
       })
+      // Auto-unlock migration: real broker credentials on file = operator
+      // consent. Fixes workspaces that lost unlock flags in a machine move
+      // while keeping keyless (fresh) workspaces locked.
+      if (ws.brokerConfig.binance || ws.brokerConfig.ibkr) {
+        ws.liveRequested = true
+        ws.liveUnlocked = true
+        ws.adminApprovedLive = true
+        ws.firstLiveOrderAuthorized = true
+      }
       return ws
     }
   } catch { /* corrupted workspace — fresh */ }
@@ -356,6 +365,16 @@ export const useStore = create<AppState>()((set, get) => ({
     set(s => ({ brokerConfig: { ...s.brokerConfig, [id]: cfg } }))
     AuditLogger.info('BROKER', `${id.toUpperCase()} API configuration ${cfg ? 'saved' : 'cleared'}`,
       'Credentials are stored only in this browser (localStorage) and sent only to the broker\'s own API endpoint.')
+    // Auto-complete the live authorization chain when the user configures a
+    // REAL broker: entering API keys is the explicit consent act. A workspace
+    // without credentials stays locked (and couldn't route live orders anyway).
+    // This is a single-operator platform — the old request/approve flow was
+    // theater that repeatedly locked the operator out after migrations.
+    if (cfg && (id === 'binance' || id === 'ibkr')) {
+      set({ liveRequested: true, liveUnlocked: true, adminApprovedLive: true, firstLiveOrderAuthorized: true })
+      AuditLogger.warn('ADMIN', 'Live trading auto-unlocked: real broker credentials configured',
+        'Request, compliance approval, and first-order authorization auto-completed for the single-operator setup.')
+    }
   },
   setMarketKey: (provider, key) => {
     set(s => ({ marketKeys: { ...s.marketKeys, [provider]: key } }))

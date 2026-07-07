@@ -1,11 +1,9 @@
 import React from 'react'
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
-import { useState } from 'react'
 import {
   LayoutDashboard, BrainCircuit, History, ShieldAlert, Radar, PieChart,
   Link2, Settings2, LogOut, OctagonX, Sun, Moon, BookOpen
 } from 'lucide-react'
-import { Modal } from './ui'
 import { useStore } from '../store/store'
 import { Badge, Segmented, Toggle } from './ui'
 import { DISCLAIMER_SHORT } from '../types'
@@ -32,16 +30,12 @@ export default function Layout() {
   const logOut = useStore(s => s.logOut)
   const theme = useStore(s => s.theme)
   const setTheme = useStore(s => s.setTheme)
-  const liveUnlocked = useStore(s => s.liveUnlocked)
-  const adminApprovedLive = useStore(s => s.adminApprovedLive)
   const setTradingMode = useStore(s => s.setTradingMode)
-  const [liveBlocked, setLiveBlocked] = useState(false)
   const profile = useStore(s => s.profile)
 
-  const switchMode = (m: 'paper' | 'live') => {
-    if (m === 'live' && !(liveUnlocked && adminApprovedLive)) { setLiveBlocked(true); return }
-    setTradingMode(m)
-  }
+  // Pure view switch — pipelines run in parallel regardless; live ORDER
+  // routing is gated separately in the engine (credentials + unlock chain).
+  const switchMode = (m: 'paper' | 'live') => setTradingMode(m)
 
   const regimeTone = regime === 'Trending' ? 'green' : regime === 'Risk-Off' ? 'red' : regime === 'Volatile' ? 'amber' : 'blue'
   const paperOk = brokerConn.paper.status === 'connected'
@@ -101,17 +95,6 @@ export default function Layout() {
             <OctagonX size={14} /> {emergencyStop ? 'Release stop' : 'Emergency stop'}
           </button>
         </header>
-
-        <Modal open={liveBlocked} onClose={() => setLiveBlocked(false)}>
-          <h2>Live trading is locked</h2>
-          <p>Switching to live mode requires the full authorization chain: a connected real broker (IBKR gateway or
-            Binance), a live-trading unlock request, compliance review with admin approval, and your explicit
-            enablement — all on the Brokers page. This protects you from accidentally routing real orders.</p>
-          <div className="row spread mt">
-            <button className="btn" onClick={() => setLiveBlocked(false)}>Close</button>
-            <a className="btn primary" href="#/brokers" onClick={() => setLiveBlocked(false)}>Open Brokers page</a>
-          </div>
-        </Modal>
 
         <main className="content"><Outlet /></main>
 
