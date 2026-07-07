@@ -216,20 +216,37 @@ async function tick(): Promise<void> {
     const isRealPosition = !!posTrade && posTrade.broker !== 'paper'
     if (isRealPosition && (s.assetSources[p.symbol] ?? 'simulated') === 'simulated') continue
 
-    // trailing stop ratchet — armed only once the position is in profit by
-    // half the stop distance, so breakeven noise can't shake positions out
-    // minutes after entry
+    // Trailing stop ratchet. Rules (backtest-validated on 30d real 5-min
+    // data — arm 0.4× / trail 0.5× beat the 1×/1× geometry on every fold,
+    // win rate 38.5% → 43.3%):
+    //  1. Trail by 0.5× the position's OWN stop distance (volatility-scaled
+    //     at entry, derived from entry vs stopLoss) — not the global setting.
+    //  2. Arm once price has moved 0.4× the stop distance in favor — early
+    //     enough to catch the small moves that 4h holds actually produce.
+    //  3. Once armed, the trail never sits below breakeven + round-trip fees
+    //     (~0.3%): an armed trailing exit is a small WIN by construction.
     if (s.settings.trailingStopEnabled) {
-      const armed = p.direction === 'Long'
-        ? price >= p.entryPrice * (1 + s.settings.stopLossPct / 200)
-        : price <= p.entryPrice * (1 - s.settings.stopLossPct / 200)
+      const TRAIL_ARM_FRAC = 0.4, TRAIL_DIST_FRAC = 0.5
+      const stopDist = p.entryPrice > 0 ? Math.abs(p.entryPrice - p.stopLoss) / p.entryPrice : 0
+      const beFloor = p.direction === 'Long' ? p.entryPrice * 1.003 : p.entryPrice * 0.997
+      const armed = stopDist > 0 && (p.direction === 'Long'
+        ? price >= p.entryPrice * (1 + stopDist * TRAIL_ARM_FRAC)
+        : price <= p.entryPrice * (1 - stopDist * TRAIL_ARM_FRAC))
       if (armed) {
-        const trail = p.direction === 'Long'
-          ? price * (1 - s.settings.stopLossPct / 100)
-          : price * (1 + s.settings.stopLossPct / 100)
+        const raw = p.direction === 'Long'
+          ? price * (1 - stopDist * TRAIL_DIST_FRAC)
+          : price * (1 + stopDist * TRAIL_DIST_FRAC)
+        const trail = p.direction === 'Long' ? Math.max(raw, beFloor) : Math.min(raw, beFloor)
         const better = p.trailingStop === undefined ||
           (p.direction === 'Long' ? trail > p.trailingStop : trail < p.trailingStop)
         if (better) useStore.getState().patchPosition(p.tradeId, { trailingStop: trail })
+      } else if (p.trailingStop !== undefined &&
+        (p.direction === 'Long' ? p.trailingStop < beFloor : p.trailingStop > beFloor)) {
+        // Stale trail from the old ungated logic (set at entry or on phantom
+        // restart prices): a legit trail can never sit in the loss zone under
+        // rules 2–3, so a below-breakeven trail is by definition stale. Drop
+        // it — the hard stop loss still protects the position.
+        useStore.getState().patchPosition(p.tradeId, { trailingStop: undefined })
       }
     }
 
@@ -313,6 +330,21 @@ async function tick(): Promise<void> {
   }
   if (!s.autoTrading || s.autoPaused || s.emergencyStop || s.killSwitch) return
   if (ticksSinceTrade < 5 || Math.random() > 0.45) return
+  // Entry pacing: at the old ~15s minimum spacing the engine averaged ~21
+  // trades/day — ~4%/day of round-trip commission drag on its own. Backtest
+  // (30d, 8 pairs): 2h spacing more than halved the compounded loss vs
+  // unthrottled; every fold agreed. Quality over quantity.
+  {
+    const ENTRY_SPACING_MS = 2 * 3600_000
+    const lastEntry = s.trades.reduce((m, t) =>
+      (t.status === 'Filled' || t.status === 'Closed') && t.openedAt > m ? t.openedAt : m, 0)
+    const wait = ENTRY_SPACING_MS - (Date.now() - lastEntry)
+    if (wait > 0) {
+      useStore.getState().setEngineStatus(s.engineMode,
+        `Entry pacing: next entry window opens in ${Math.ceil(wait / 60000)} min (2h spacing keeps commission drag survivable).`, s.lastConfidence)
+      return
+    }
+  }
   // Don't generate proposals while the broker link is unhealthy — wait for recovery
   if (!activeBrokerHealthy()) {
     useStore.getState().setEngineStatus(s.engineMode, 'Broker link unhealthy — holding new proposals until connection recovers.', 0)

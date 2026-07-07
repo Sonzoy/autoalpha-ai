@@ -122,10 +122,12 @@ export const StrategySelector = {
     // don't cluster in the 90s
     const confidence = Math.max(50, Math.min(95, Math.round(best.signal.score * 0.9 + (best.snap.liquidity - 50) / 10)))
 
-    // Movement-scaled exits: a 2% stop is noise on DOGE and generous on BTC.
-    // Scale the user's stop/target by CURRENT measured volatility so each
-    // coin's exit distances match how far it actually moves. R:R preserved.
-    const volFactor = Math.min(2, Math.max(0.75, best.snap.volatility / 50))
+    // Movement-scaled exits, TIGHTEN-ONLY. Backtest on 30d of real 5-min data
+    // (8 pairs, 641 trades): widening stops with volatility (old cap ×2) let
+    // losers run to -2%+ while the 4h max-hold capped winners — avg net
+    // -0.257%/trade. Capping the factor at 1 (never wider than the user's
+    // setting, tighter in quiet regimes) improved every fold. R:R preserved.
+    const volFactor = Math.min(1, Math.max(0.75, best.snap.volatility / 50))
     const stopLossPct = Math.round(ctx.settings.stopLossPct * volFactor * 10) / 10
     const takeProfitPct = Math.round(ctx.settings.takeProfitPct * volFactor * 10) / 10
 

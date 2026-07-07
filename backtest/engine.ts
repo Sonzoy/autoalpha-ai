@@ -21,9 +21,15 @@ export const HERE = path.dirname(fileURLToPath(import.meta.url))
 export const COMMISSION_PER_SIDE = 0.001 // Binance spot 0.1%
 export const MACRO_RISK = 35             // baseline; no real macro series exists in price data
 export const WARMUP = 41
-export const SYMBOLS = ['BTC/USD', 'ETH/USD', 'SOL/USD']
-const BINANCE_PAIR: Record<string, string> = { 'BTC/USD': 'BTCUSDT', 'ETH/USD': 'ETHUSDT', 'SOL/USD': 'SOLUSDT' }
-const DEFAULT_VOLS: Record<string, number> = { 'BTC/USD': 0.55, 'ETH/USD': 0.65, 'SOL/USD': 0.85 }
+export const SYMBOLS = ['BTC/USD', 'ETH/USD', 'SOL/USD', 'DOGE/USD', 'XRP/USD', 'AVAX/USD', 'LINK/USD', 'ADA/USD']
+const BINANCE_PAIR: Record<string, string> = {
+  'BTC/USD': 'BTCUSDT', 'ETH/USD': 'ETHUSDT', 'SOL/USD': 'SOLUSDT', 'DOGE/USD': 'DOGEUSDT',
+  'XRP/USD': 'XRPUSDT', 'AVAX/USD': 'AVAXUSDT', 'LINK/USD': 'LINKUSDT', 'ADA/USD': 'ADAUSDT'
+}
+const DEFAULT_VOLS: Record<string, number> = {
+  'BTC/USD': 0.55, 'ETH/USD': 0.65, 'SOL/USD': 0.85, 'DOGE/USD': 1.05,
+  'XRP/USD': 0.9, 'AVAX/USD': 1.0, 'LINK/USD': 0.95, 'ADA/USD': 0.9
+}
 
 export interface Params {
   stopLossPct: number
@@ -32,12 +38,19 @@ export interface Params {
   maxHoldBars: number
   entryCooldown: number
   trailing: boolean
+  /** Exit-geometry knobs (defaults = current LIVE engine behavior). */
+  useProposalExits: boolean // per-trade vol-scaled stop/TP from the selector (live behavior)
+  volCapStop: number        // cap on the selector's volFactor applied in-sim (2 = live's cap)
+  trailArmFrac: number      // arm trail at trailArmFrac × stop distance in profit (1 = live)
+  trailDistFrac: number     // trail by trailDistFrac × stop distance once armed (1 = live)
+  beFloorPct: number        // armed trail never below entry×(1+beFloorPct/100) (0.3 = live)
 }
 export const BALANCED_PARAMS: Params = {
   stopLossPct: RISK_DEFAULTS.Balanced.stopLossPct,
   takeProfitPct: RISK_DEFAULTS.Balanced.takeProfitPct,
   minConfidence: 50, maxHoldBars: 48, entryCooldown: 5,
-  trailing: RISK_DEFAULTS.Balanced.trailingStopEnabled
+  trailing: RISK_DEFAULTS.Balanced.trailingStopEnabled,
+  useProposalExits: true, volCapStop: 2, trailArmFrac: 1, trailDistFrac: 1, beFloorPct: 0.3
 }
 
 export interface Trade { symbol: string; confidence: number; entry: number; exit: number; grossPct: number; netPct: number; win: boolean; bars: number; reason: string; bar: number }
@@ -105,14 +118,24 @@ export function simulate(data: Data, p: Params, entryFrom = WARMUP, entryTo = In
       intel[sym] = computeIntel(sym, hist, data[sym].vol, sent[sym])
     }
 
-    // manage open positions (engine exit rules)
+    // manage open positions — MIRRORS TradingEngine.ts exactly:
+    // trail by the position's own stop distance, arm at trailArmFrac × that
+    // distance in profit, armed trail floored at breakeven + fees.
     for (const sym of series) {
       const pp = pos[sym]; if (!pp) continue
       const price = assets.find(a => a.symbol === sym)?.price; if (!price) continue
-      if (p.trailing) { const trail = price * (1 - p.stopLossPct / 100); if (pp.trailingStop === undefined || trail > pp.trailingStop) pp.trailingStop = trail }
+      if (p.trailing) {
+        const stopDist = (pp.entry - pp.stopLoss) / pp.entry
+        const beFloor = pp.entry * (1 + p.beFloorPct / 100)
+        if (stopDist > 0 && price >= pp.entry * (1 + stopDist * p.trailArmFrac)) {
+          const raw = price * (1 - stopDist * p.trailDistFrac)
+          const trail = Math.max(raw, beFloor)
+          if (pp.trailingStop === undefined || trail > pp.trailingStop) pp.trailingStop = trail
+        }
+      }
       const effStop = (p.trailing ? pp.trailingStop : undefined) ?? pp.stopLoss
       let reason: string | null = null
-      if (price <= effStop) reason = 'Stop'
+      if (price <= effStop) reason = pp.trailingStop !== undefined && effStop === pp.trailingStop ? 'Trail' : 'Stop'
       else if (price >= pp.takeProfit) reason = 'Target'
       else if (bar - pp.openedBar >= p.maxHoldBars) reason = 'Max-hold'
       if (reason) {
@@ -131,10 +154,20 @@ export function simulate(data: Data, p: Params, entryFrom = WARMUP, entryTo = In
     const prop = sel.proposal
     if (!prop || prop.direction !== 'Long' || pos[prop.symbol] || prop.confidence < p.minConfidence) continue
     const price = assets.find(a => a.symbol === prop.symbol)!.price
+    // Exit distances: live engine uses the selector's vol-scaled per-trade
+    // percentages (prop.stopLossPct/takeProfitPct). volCapStop lets variants
+    // re-cap the scaling without touching src/. R:R ratio is preserved.
+    let slPct = p.stopLossPct, tpPct = p.takeProfitPct
+    if (p.useProposalExits) {
+      const impliedFactor = prop.stopLossPct / RISK_DEFAULTS.Balanced.stopLossPct
+      const f = Math.min(impliedFactor, p.volCapStop)
+      slPct = RISK_DEFAULTS.Balanced.stopLossPct * f
+      tpPct = RISK_DEFAULTS.Balanced.takeProfitPct * f
+    }
     pos[prop.symbol] = {
       tradeId: `bt-${bar}`, symbol: prop.symbol, market: 'Crypto', direction: 'Long', qty: 1,
       entryPrice: price, entry: price, openedBar: bar,
-      stopLoss: price * (1 - p.stopLossPct / 100), takeProfit: price * (1 + p.takeProfitPct / 100),
+      stopLoss: price * (1 - slPct / 100), takeProfit: price * (1 + tpPct / 100),
       strategy: prop.strategy, confidence: prop.confidence, openedAt: bar
     }
     cooldown = p.entryCooldown
@@ -195,5 +228,7 @@ export async function loadData(): Promise<Data> {
     out[sym] = { vol: DEFAULT_VOLS[sym], history: closes.slice(-barsWanted) }
     console.log(`Fetched ${sym}: ${out[sym].history.length} bars from Binance`)
   }
+  // Cache so subsequent runs/variants compare on IDENTICAL data
+  fs.writeFileSync(path.join(HERE, 'real-history.json'), JSON.stringify(out))
   return out
 }
